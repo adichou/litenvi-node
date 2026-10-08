@@ -1,0 +1,17 @@
+{
+  "name": "litenvi-node",
+  "version": "0.1.0",
+  "description": "跨项目 Node 测试假环境：独立 VM 加载完整生产源码，替身只落在环境边界——memfs 内存文件系统、FakeTimers 冻结时钟、确定性随机序列、内存 Git 沙盒、假 HTTP 传输层。",
+  "type": "module",
+  "exports": {
+    "./*": "./*"
+  },
+  "files": [
+    "*.mjs"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@sinonjs/fake-timers": "15.4.0",
+    "memfs": "4.80.0"
+  }
+}
