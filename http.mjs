@@ -74,7 +74,9 @@ export function createHttpTransport({ deny }) {
     return res;
   }
 
-  // 用例侧请求入口：直调服务端 handler，返回 { status, json }。
+  // 用例侧请求入口：直调服务端 handler，返回 { status, json, headers, text }。
+  // JSON 响应解析为 json；非 JSON 的非空响应（流式/二进制端点的正常形态）原样带回 text，
+  // json 为 null；空响应按环境故障拒绝。
   function request(method, pathname, body) {
     if (disposed) throw new Error('Mock 环境已释放');
     // 项目专属的公共查询参数（如 ATB 的 project）由项目 utils 层拼进 pathname，这里保持通用。
@@ -92,8 +94,18 @@ export function createHttpTransport({ deny }) {
       res.on('data', (chunk) => { text += chunk; });
       res.on('error', (error) => settle(reject, error));
       res.on('end', () => {
-        try { settle(resolve, { status: res.statusCode, json: JSON.parse(text) }); }
-        catch (error) { settle(reject, new Error(`接口未返回 JSON：${text}`, { cause: error })); }
+        let parsed = null;
+        try { parsed = JSON.parse(text); } catch { /* 非 JSON：流式/二进制端点 */ }
+        if (parsed === null && text.trim() === '') {
+          settle(reject, new Error('接口未返回 JSON：（空响应）'));
+          return;
+        }
+        settle(resolve, {
+          status: res.statusCode,
+          json: parsed,
+          headers: res.headers,
+          text: parsed === null ? text : undefined,
+        });
       });
       req.on('error', (error) => settle(reject, error));
       try { server.handler(req, res); }

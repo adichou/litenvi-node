@@ -16,6 +16,19 @@ import { createFsView } from './fs.mjs';
 import { createGitView } from './git.mjs';
 import { createHttpTransport } from './http.mjs';
 
+// 可控写入故障开关：维护一个目标片段集合（子串匹配），命中任一片段即视为应注入写入失败。
+// 片段可在用例运行中动态增删（故障解除后重试、只对指定目标故障等场景）；本身不含任何
+// 业务路径语义，调用方把项目专属的基础谓词与 matches 组合后传给 buildMockEnvironment
+// 的 failWrite 即可。
+export function setFileWriteError() {
+  const fragments = new Set();
+  return {
+    matches: (target) => [...fragments].some((frag) => target.includes(frag)),
+    add: (...frags) => { for (const frag of frags) fragments.add(frag); },
+    remove: (frag) => { fragments.delete(frag); },
+  };
+}
+
 export async function buildMockEnvironment({
   srcRoot, projectRoot, env = {}, initialData, failWrite,
   now = '2026-10-08T04:00:00.000Z',
@@ -30,6 +43,7 @@ export async function buildMockEnvironment({
   filesystem.mkdirSync('/mock/home', { recursive: true });
   filesystem.mkdirSync('/mock/tmp', { recursive: true });
   const clock = FakeTimers.createClock(Date.parse(now));
+  const commandExitCodes = new Map();
   const unexpected = [];
   const logs = [];
   let disposed = false;
@@ -55,23 +69,167 @@ export async function buildMockEnvironment({
   // 初始数据由调用方铺设；之后一切状态均由真实生产业务写入。
   if (initialData) initialData(filesystem);
 
-  // 内存 Git 沙盒：模拟真实仓库的常见命令序列（is-inside-work-tree / show-toplevel /
-  // status --porcelain / add -A / commit --only / rev-parse HEAD），让依赖 git 的业务
+  // 内存 Git 沙盒：模拟真实仓库的常见命令序列（init / switch / branch / rev-parse / rev-list /
+  // log / remote / symbolic-ref / status --porcelain / add -A / commit --only），让依赖 git 的业务
   // 链路在内存中完整跑通；序列之外的任何 git 调用仍按未声明调用拒绝并记账。
+  // 分支模型：默认分支 main（init -b 可指定）；bornBranches 只收录已指向提交的分支——
+  // 空仓库时当前分支「未出生」（switch -c 等价改名，首个提交使其出生），与真实 git 语义一致。
   const gitLog = [];
   const committedPaths = new Set();
+  let currentBranch = 'main';
+  const bornBranches = new Set();
+  // 整树工作区状态（workingTreeSnapshot 用的无 pathspec status）：遍历项目根，
+  // 排除 .git / node_modules / 根 .gitignore 前缀规则与已提交路径；沙盒只有未跟踪（??）一种脏形态。
+  const listUncommittedFiles = () => {
+    let ignoreRules = [];
+    try {
+      ignoreRules = filesystem.readFileSync(path.join(projectRoot, '.gitignore'), 'utf8').split('\n')
+        .map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+    } catch { /* 无 .gitignore */ }
+    const ignored = (rel) => ignoreRules.some((rule) => rel === rule
+      || rel.startsWith(rule.endsWith('/') ? rule : `${rule}/`));
+    const out = [];
+    const walk = (abs, rel) => {
+      let names = [];
+      try { names = filesystem.readdirSync(abs); } catch { return; }
+      for (const name of names) {
+        if (name === '.git' || name === 'node_modules') continue;
+        const childAbs = path.join(abs, name);
+        const childRel = rel ? `${rel}/${name}` : name;
+        let stat = null;
+        try { stat = filesystem.statSync(childAbs); } catch { continue; }
+        if (stat.isDirectory()) { walk(childAbs, childRel); continue; }
+        if (ignored(childRel)) continue;
+        const committed = [...committedPaths].some((c) => childRel === c || childRel.startsWith(`${c}/`));
+        if (!committed) out.push(childRel);
+      }
+    };
+    walk(projectRoot, '');
+    return out.sort();
+  };
   const fakeGit = (argv) => {
     const readonly = argv[0] === '--no-optional-locks';
     const args = readonly ? argv.slice(1) : argv;
     const pathspec = () => args.slice(args.indexOf('--') + 1)[0];
+    const headKnown = () => gitLog.length
+      ? { status: 0, stdout: `${gitLog[gitLog.length - 1].hash}\n`, stderr: '' }
+      : { status: 128, stdout: '', stderr: "fatal: ambiguous argument 'HEAD': unknown revision\n" };
+    if (args[0] === 'init') {
+      const bIdx = args.indexOf('-b');
+      currentBranch = bIdx !== -1 ? String(args[bIdx + 1] || 'main') : 'main';
+      return { status: 0, stdout: `Initialized empty Git repository in ${projectRoot}/.git\n`, stderr: '' };
+    }
+    if (args[0] === 'switch') {
+      const target = String(args[args.length - 1] || '');
+      if (args.includes('-c')) {
+        // 已有提交：创建并切换（引用出生）；空仓库（HEAD 未出生）：等价把未出生分支改名
+        if (gitLog.length) bornBranches.add(target);
+      } else if (!bornBranches.has(target)) {
+        return { status: 128, stdout: '', stderr: `fatal: invalid reference: ${target}\n` };
+      }
+      currentBranch = target;
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    if (args[0] === 'branch') {
+      if (typeof args[1] === 'string' && args[1].startsWith('--format=')) {
+        const names = [...bornBranches].sort();
+        return { status: 0, stdout: names.length ? `${names.join('\n')}\n` : '', stderr: '' };
+      }
+      if (args[1] === '--show-current') {
+        return { status: 0, stdout: `${currentBranch}\n`, stderr: '' };
+      }
+      const name = typeof args[1] === 'string' && !args[1].startsWith('-') ? args[1] : null;
+      if (name) {
+        const sha = String(args[2] || '');
+        if (!gitLog.some((c) => c.hash.startsWith(sha))) {
+          return { status: 128, stdout: '', stderr: `fatal: not a valid object name: ${sha || '(missing)'}\n` };
+        }
+        bornBranches.add(name);
+        return { status: 0, stdout: '', stderr: '' };
+      }
+    }
     if (args[0] === 'rev-parse') {
       if (args[1] === '--is-inside-work-tree') return { status: 0, stdout: 'true\n', stderr: '' };
       if (args[1] === '--show-toplevel') return { status: 0, stdout: `${projectRoot}\n`, stderr: '' };
-      if (args[1] === 'HEAD') {
-        return gitLog.length
-          ? { status: 0, stdout: `${gitLog[gitLog.length - 1].hash}\n`, stderr: '' }
-          : { status: 128, stdout: '', stderr: "fatal: ambiguous argument 'HEAD': unknown revision\n" };
+      if (args[1] === 'HEAD') return headKnown();
+      if (args[1] === '--verify') {
+        // refs/heads/<分支>（可带 ^{commit} 后缀）：按分支出生语义解析（stdout 取沙盒最新提交哈希近似——消费方只判定状态码）
+        const ref = String(args[2] || '').match(/^refs\/heads\/(.+?)(\^\{commit\})?$/);
+        if (ref) {
+          return bornBranches.has(ref[1]) && gitLog.length
+            ? { status: 0, stdout: `${gitLog[gitLog.length - 1].hash}\n`, stderr: '' }
+            : { status: 128, stdout: '', stderr: '' };
+        }
+        return headKnown();
       }
+    }
+    if (args[0] === 'merge-base' && args[1] === '--is-ancestor') {
+      // 线性历史祖先判定：提交下标 a <= b 即 a 是 b 的祖先；未知提交按非祖先（退出码 1）
+      const idxOf = (ref) => gitLog.findIndex((c) => c.hash === String(ref).toLowerCase());
+      const a = idxOf(String(args[2] || ''));
+      const b = idxOf(String(args[3] || ''));
+      return a !== -1 && b !== -1 && a <= b
+        ? { status: 0, stdout: '', stderr: '' }
+        : { status: 1, stdout: '', stderr: '' };
+    }
+    if (args[0] === 'rev-list' && args.includes('--max-parents=0')) {
+      // 线性历史：根提交即首条
+      return gitLog.length
+        ? { status: 0, stdout: `${gitLog[0].hash}\n`, stderr: '' }
+        : { status: 128, stdout: '', stderr: "fatal: bad revision 'HEAD'\n" };
+    }
+    if (args[0] === 'log') {
+      if (!gitLog.length) {
+        return { status: 128, stdout: '', stderr: `fatal: your current branch '${currentBranch}' does not have any commits yet\n` };
+      }
+      // 位置起点 + --not 排除（product-release collectExtraCommits 口径）：
+      // include = 起点可达（线性：下标 <= 起点），exclude = 各排除提交可达（下标 <= 排除点），
+      // 差集即 排除点最浅者 < 下标 <= 起点；无位置起点时为全历史。
+      let startIdx = gitLog.length - 1;
+      let excludeBefore = -1;
+      let excludeMode = false;
+      let fmt = '--format=%H';
+      for (const arg of args.slice(1)) {
+        if (arg === '--not') { excludeMode = true; continue; }
+        if (typeof arg === 'string' && arg.startsWith('--format=')) { fmt = arg; continue; }
+        if (typeof arg === 'string' && arg.startsWith('--')) continue;
+        const idx = gitLog.findIndex((c) => c.hash === String(arg).toLowerCase());
+        if (idx === -1) {
+          return { status: 128, stdout: '', stderr: `fatal: bad revision '${arg}'\n` };
+        }
+        if (excludeMode) excludeBefore = Math.max(excludeBefore, idx);
+        else startIdx = Math.min(startIdx, idx);
+      }
+      const rows = [];
+      for (let i = startIdx; i > excludeBefore; i--) {
+        const c = gitLog[i];
+        const line = fmt.slice('--format='.length)
+          .replace('%H', c.hash).replace('%h', c.hash.slice(0, 7))
+          .replace('%an', c.author).replace('%aI', c.at).replace('%cI', c.at)
+          .replace('%s', c.subject)
+          .split('%x09').join('\t');
+        rows.push(line);
+      }
+      return { status: 0, stdout: rows.join('\n') + (rows.length ? '\n' : ''), stderr: '' };
+    }
+    if (args[0] === 'remote') {
+      // 沙盒恒有唯一远端 origin（仅本地名字与 URL 事实，无任何网络交互）
+      if (args[1] === 'get-url') {
+        const name = String(args[2] || '');
+        return name === 'origin'
+          ? { status: 0, stdout: `https://git.mock.local${projectRoot}.git\n`, stderr: '' }
+          : { status: 128, stdout: '', stderr: `error: No such remote '${name}'\n` };
+      }
+      return { status: 0, stdout: 'origin\n', stderr: '' };
+    }
+    if (args[0] === 'symbolic-ref' && args[1] === '--short' && args[2] === 'HEAD') {
+      // HEAD 恒为指向当前分支的符号引用（未出生分支同样成立，与真实 git 一致）
+      return { status: 0, stdout: `${currentBranch}\n`, stderr: '' };
+    }
+    if (args[0] === 'status' && args[1] === '--porcelain' && !args.includes('--')) {
+      // 整树口径（无 pathspec，-uall 等修饰参数任意）：逐文件列出未提交路径
+      const lines = listUncommittedFiles().map((rel) => `?? ${rel}`);
+      return { status: 0, stdout: lines.join('\n') + (lines.length ? '\n' : ''), stderr: '' };
     }
     if (args[0] === 'status' && args[1] === '--porcelain' && args.includes('--')) {
       const target = pathspec();
@@ -80,6 +238,15 @@ export async function buildMockEnvironment({
         return { status: 0, stdout: ` D ${target}\n`, stderr: '' };
       }
       return { status: 0, stdout: committedPaths.has(target) ? '' : `?? ${target}/\n`, stderr: '' };
+    }
+    if (args[0] === 'ls-files' && args.includes('--error-unmatch')) {
+      // pathspec 可匹配性判定（commitPaths 容错重试用）：-- 之后的路径在已提交集合或磁盘上即匹配
+      const p = pathspec();
+      const matchable = [...committedPaths].some((c) => p === c || p.startsWith(`${c}/`))
+        || filesystem.existsSync(path.join(projectRoot, p));
+      return matchable
+        ? { status: 0, stdout: `${p}\n`, stderr: '' }
+        : { status: 128, stdout: '', stderr: `fatal: pathspec '${p}' did not match any files\n` };
     }
     if (!readonly && args[0] === 'add' && args[1] === '-A' && args.includes('--')) {
       const target = pathspec();
@@ -93,18 +260,74 @@ export async function buildMockEnvironment({
       const subject = args[args.indexOf('-m') + 1];
       const paths = args.slice(args.indexOf('--') + 1);
       for (const item of paths) committedPaths.add(item);
-      // 复用确定性随机序列生成提交号：结果稳定可断言，短号随提交次序变化。
+      // 复用确定性随机序列生成提交号：结果稳定可断言，短号随提交次序变化；
+      // 提交时间取 Mock 时钟（log %cI 可断言）；首提交使当前分支出生。
       const hash = cryptoMock.randomBytes(20).toString('hex');
-      gitLog.push({ hash, subject, paths });
+      gitLog.push({ hash, subject, paths, at: new clock.Date().toISOString(), author: 'mock-user' });
+      bornBranches.add(currentBranch);
       return { status: 0, stdout: '', stderr: '' };
     }
     return deny('git 序列外调用')(args.join(' '));
   };
   const childProcess = {
-    spawn: deny('spawn'), execFile: deny('execFile'), execFileSync: deny('execFileSync'),
+    // Mock 世界工具链：npm test 立即「跑完」（异步 emit 输出与退出码，默认 0，可经
+    // setCommandExitCode 切换）；其余命令仍按未声明调用记账。
+    spawn(command, args, options) {
+      // git（绑定 projectRoot 的 cwd）：把沙盒 git 结果包装成异步子进程事件（realExec 等
+      // 异步执行器消费 close/stdout/stderr）；npm test 立即「跑完」（异步 emit 输出与退出码，
+      // 默认 0，可经 setCommandExitCode 切换）；其余命令仍按未声明调用记账。
+      if (command === 'git' && options?.cwd === projectRoot) {
+        const result = fakeGit(args);
+        const child = new EventEmitter();
+        child.pid = 4244;
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => true;
+        setImmediate(() => {
+          if (result.stdout) child.stdout.emit('data', Buffer.from(result.stdout));
+          if (result.stderr) child.stderr.emit('data', Buffer.from(result.stderr));
+          child.emit('exit', result.status, null);
+          child.emit('close', result.status, null);
+        });
+        return child;
+      }
+      if (command === 'npm' && args[0] === 'test') {
+        const key = [command, ...args].join(' ');
+        const exitCode = commandExitCodes.has(key) ? commandExitCodes.get(key) : 0;
+        const child = new EventEmitter();
+        child.pid = 4243;
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        child.kill = () => true;
+        setImmediate(() => {
+          try { child.stdout.emit('data', Buffer.from('mock npm test run\n')); } catch { /* 无监听者 */ }
+          child.emit('exit', exitCode, null);
+          child.emit('close', exitCode, null);
+        });
+        return child;
+      }
+      return deny('spawn')(command, args);
+    },
+    execFile: deny('execFile'),
     exec: deny('exec'), execSync: deny('execSync'), fork: deny('fork'),
+    // Mock 世界 PATH 中无可执行文件：which 探测一律「未找到」（execFileSync 非零退出即抛错，
+    // 与真实 Node 行为一致）；其余命令仍按未声明调用记账。
+    execFileSync(command) {
+      if (command === 'which') {
+        throw Object.assign(new Error("execFileSync 'which' exited with 1"), { status: 1 });
+      }
+      return deny('execFileSync')(command, Array.from(arguments).slice(1));
+    },
     spawnSync(command, args, options) {
       if (command === 'git' && options?.cwd === projectRoot) return fakeGit(args);
+      // Mock 世界自带固定版本的工具链（只读版本查询，无副作用）；其余命令仍按未声明调用记账。
+      if (command === 'node' && args[0] === '-v') return { status: 0, stdout: 'v22.0.0\n', stderr: '' };
+      if (command === 'npm' && args[0] === '-v') return { status: 0, stdout: '10.0.0\n', stderr: '' };
+      if (command === 'npm' && args[0] === 'test') {
+        const key = [command, ...args].join(' ');
+        const exitCode = commandExitCodes.has(key) ? commandExitCodes.get(key) : 0;
+        return { status: exitCode, stdout: 'mock npm test run\n', stderr: '' };
+      }
       return deny('spawnSync')(command, args);
     },
   };
@@ -188,6 +411,12 @@ export async function buildMockEnvironment({
   }
   return {
     now, dispose,
+    // 命令退出码开关（环境级，无业务语义）：key 为完整 argv 空格拼接（如 'npm test --silent'），
+    // 未设置的命令缺省退出 0；传 null/undefined 删除恢复缺省。
+    setCommandExitCode: (key, code) => {
+      if (code == null) commandExitCodes.delete(String(key));
+      else commandExitCodes.set(String(key), code);
+    },
     // 通用观测面：未声明调用记账、服务日志，以及只读的 fs / git 查询对象与 http 入口
     // （request 动作 + requests 流水账）。
     unexpected, logs,
