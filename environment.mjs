@@ -29,9 +29,35 @@ export function setFileWriteError() {
   };
 }
 
+// 最小组件替身：浏览器界面元素的状态面（文本/标题/类名/数据集/属性），只记录状态变化，
+// 不做任何布局与 DOM 结构——供 View–Action 架构的 action 用例在无真实浏览器的情况下
+// 断言 action 对界面组件状态的感知与修改。零业务语义，任意项目可复用。
+export function createElement(tag = 'div') {
+  const classes = new Set();
+  const attributes = new Map();
+  return {
+    tagName: String(tag).toUpperCase(),
+    textContent: '', title: '', hidden: false,
+    dataset: {},
+    classList: {
+      add: (...names) => { for (const name of names) classes.add(name); },
+      remove: (...names) => { for (const name of names) classes.delete(name); },
+      toggle: (name, force) => {
+        const target = force === undefined ? !classes.has(name) : Boolean(force);
+        if (target) classes.add(name); else classes.delete(name);
+        return target;
+      },
+      contains: (name) => classes.has(name),
+    },
+    get className() { return [...classes].join(' '); },
+    setAttribute(name, value) { attributes.set(String(name), String(value)); },
+    getAttribute(name) { return attributes.has(String(name)) ? attributes.get(String(name)) : null; },
+  };
+}
+
 export async function buildMockEnvironment({
   srcRoot, projectRoot, env = {}, initialData, failWrite,
-  now = '2026-10-08T04:00:00.000Z',
+  now = '2026-10-08T04:00:00.000Z', sideEntries,
 } = {}) {
   if (!srcRoot) throw new Error('buildMockEnvironment 需要显式传入 srcRoot（生产入口源码文件路径，其所在目录即源码加载边界）。');
   if (!projectRoot) throw new Error('buildMockEnvironment 需要显式传入 projectRoot（Mock 世界的虚拟项目根，与调用方业务路径同源）。');
@@ -46,6 +72,7 @@ export async function buildMockEnvironment({
   const commandExitCodes = new Map();
   const unexpected = [];
   const logs = [];
+  let sideEntriesFace = {};
   let disposed = false;
 
   function deny(label) {
@@ -355,7 +382,9 @@ export async function buildMockEnvironment({
     console: { log: (...args) => logs.push(args.join(' ')), error: (...args) => logs.push(args.join(' ')), warn: (...args) => logs.push(args.join(' ')) },
     Date: clock.Date, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
     setInterval: clock.setInterval, clearInterval: clock.clearInterval,
-    fetch: deny('fetch'),
+    // fetch 替身：前端代码（action 层）的全局通道——同源相对路径直达内存传输层（同 VM 的
+    // 服务端路由）；跨源 / 绝对地址按未声明调用记账。
+    fetch: transport.fetch,
   });
   const modules = new Map();
   const pureBuiltins = new Set(['node:path', 'node:url', 'node:util']);
@@ -404,13 +433,26 @@ export async function buildMockEnvironment({
     await entry.link((specifier, parent) => loadModule(specifier.startsWith('node:')
       ? specifier : new URL(specifier, parent.identifier).href));
     await entry.evaluate();
+    // 附加源码入口（如前端 action 模块）：与主入口同一加载边界与依赖图，加载后把模块
+    // 命名空间经返回面 exports 交给用例——测试直接调用 VM 内的真实源码导出。
+    const exports = {};
+    for (const item of sideEntries || []) {
+      const module = await loadModule(pathToFileURL(item.file).href);
+      await module.link((specifier, parent) => loadModule(specifier.startsWith('node:')
+        ? specifier : new URL(specifier, parent.identifier).href));
+      await module.evaluate();
+      exports[item.key] = module.namespace;
+    }
     await transport.waitForListening();
+    sideEntriesFace = Object.freeze(exports);
   } catch (error) {
     try { await dispose(); } catch { /* 启动已失败：保留原始错误，收口问题不掩盖 */ }
     throw error;
   }
   return {
     now, dispose,
+    // 附加入口的模块命名空间（sideEntries 未传时为空对象）
+    exports: sideEntriesFace,
     // 命令退出码开关（环境级，无业务语义）：key 为完整 argv 空格拼接（如 'npm test --silent'），
     // 未设置的命令缺省退出 0；传 null/undefined 删除恢复缺省。
     setCommandExitCode: (key, code) => {

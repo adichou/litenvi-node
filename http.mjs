@@ -20,7 +20,9 @@ export function createHttpTransport({ deny }) {
       server = Object.assign(new EventEmitter(), {
         listening: false,
         handler(req, res) {
-          requests.push({ method: req.method, path: new URL(req.url, BASE).pathname });
+          const url = new URL(req.url, BASE);
+          // query 单列（path 保持纯 pathname，兼容既有断言）：排序键等查询参数同样是请求事实。
+          requests.push({ method: req.method, path: url.pathname, query: url.search });
           handler(req, res);
         },
         listen(_port, _host, ready) {
@@ -113,10 +115,36 @@ export function createHttpTransport({ deny }) {
     });
   }
 
+  // fetch 形态（供环境注入 VM context 全局）：前端代码（View–Action 架构的 action 层）
+  // 以全局 fetch 同源调用 API。只允许相对路径（绝对 URL / 跨源按未声明调用记账拒绝）；
+  // 语义对齐真实 fetch：resolve 出 { ok, status, statusText, headers, json(), text() }，
+  // 传输与服务端异常时 reject（由调用方 catch——离线标记等场景）。
+  function fetchMock(input, init = {}) {
+    const url = String(input);
+    if (!url.startsWith('/')) return deny('fetch 同源外地址')(url);
+    const method = String(init.method || 'GET').toUpperCase();
+    let body = init.body;
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch { /* 非 JSON 请求体：原样传给传输层 */ }
+    }
+    return request(method, url, body).then((response) => ({
+      ok: response.status >= 200 && response.status < 300,
+      status: response.status,
+      statusText: response.status === 404 ? 'Not Found' : '',
+      headers: response.headers,
+      json: async () => {
+        if (response.json !== null) return response.json;
+        throw new SyntaxError(`Unexpected token in JSON（非 JSON 响应：${String(response.text).slice(0, 40)}）`);
+      },
+      text: async () => (response.text !== undefined ? response.text : JSON.stringify(response.json)),
+    }));
+  }
+
   return {
     httpMock,
     request,
     requests,
+    fetch: fetchMock,
     isListening: () => !!server?.listening,
     waitForListening() {
       if (this.isListening()) return Promise.resolve();
