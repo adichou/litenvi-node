@@ -9,6 +9,9 @@
   "files": [
     "*.mjs"
   ],
+  "scripts": {
+    "test": "node --experimental-vm-modules tests/run-all.mjs"
+  },
   "license": "MIT",
   "dependencies": {
     "@sinonjs/fake-timers": "15.4.0",

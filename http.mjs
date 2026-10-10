@@ -147,7 +147,9 @@ export function createHttpTransport({ deny }) {
     fetch: fetchMock,
     isListening: () => !!server?.listening,
     waitForListening() {
-      if (this.isListening()) return Promise.resolve();
+      // 无服务环境（纯前端 action 模块、主入口不监听端口）与已监听环境同样视为就绪；
+      // 仅在服务存在且尚未监听时等待 listening 事件。
+      if (!server || this.isListening()) return Promise.resolve();
       return new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
     },
     async close() {

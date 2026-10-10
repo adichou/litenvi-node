@@ -15,6 +15,7 @@ import FakeTimers from '@sinonjs/fake-timers';
 import { createFsView } from './fs.mjs';
 import { createGitView } from './git.mjs';
 import { createHttpTransport } from './http.mjs';
+import { createLocalStorageMock } from './local-storage.mjs';
 
 // 可控写入故障开关：维护一个目标片段集合（子串匹配），命中任一片段即视为应注入写入失败。
 // 片段可在用例运行中动态增删（故障解除后重试、只对指定目标故障等场景）；本身不含任何
@@ -371,6 +372,10 @@ export async function buildMockEnvironment({
     randomUUID: () => `00000000-0000-4000-8000-${String(++randomSequence).padStart(12, '0')}`,
   };
   const osMock = { homedir: () => '/mock/home', tmpdir: () => '/mock/tmp', platform: () => 'darwin', arch: () => 'arm64' };
+  // localStorage 替身：前端代码的键值偏好记忆通道（内存实现，随环境销毁，不跨环境共享）。
+  // 注入 VM 全局供 action 直连读写；返回面暴露只读视图（getItem / key / length）供用例断言——
+  // 写通道仅被测业务自身，与 fs / git 观测面同一口径。
+  const { mock: localStorageMock, view: localStorageView } = createLocalStorageMock();
   const mocks = {
     'node:fs': filesystem, 'node:child_process': childProcess, 'node:crypto': cryptoMock,
     'node:os': osMock, 'node:http': transport.httpMock,
@@ -385,6 +390,7 @@ export async function buildMockEnvironment({
     // fetch 替身：前端代码（action 层）的全局通道——同源相对路径直达内存传输层（同 VM 的
     // 服务端路由）；跨源 / 绝对地址按未声明调用记账。
     fetch: transport.fetch,
+    localStorage: localStorageMock,
   });
   const modules = new Map();
   const pureBuiltins = new Set(['node:path', 'node:url', 'node:util']);
@@ -465,5 +471,7 @@ export async function buildMockEnvironment({
     fs: createFsView(filesystem),
     git: createGitView(gitLog, committedPaths),
     http: Object.freeze({ request: transport.request, requests: transport.requests }),
+    // localStorage 只读视图：断言被测业务的键值记忆写入（写通道仅被测业务自身）
+    localStorage: localStorageView,
   };
 }
