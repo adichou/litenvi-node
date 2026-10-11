@@ -1,5 +1,5 @@
-// localStorage 替身客户端 fixture：在 VM 内直连全局 localStorage 读写的最小模块，
-// 供 environment 用例经 sideEntries 加载，验证替身注入与观测面联通。
+// localStorage / sessionStorage 替身客户端 fixture：在 VM 内直连全局两条键值存储通道读写
+// 的最小模块，供 environment 用例经 sideEntries 加载，验证替身注入与观测面联通。
 export function save(key, value) {
   localStorage.setItem(key, value);
 }
@@ -10,6 +10,18 @@ export function load(key) {
 
 export function remove(key) {
   localStorage.removeItem(key);
+}
+
+export function sessionSave(key, value) {
+  sessionStorage.setItem(key, value);
+}
+
+export function sessionLoad(key) {
+  return sessionStorage.getItem(key);
+}
+
+export function windowIsSessionChannel() {
+  return typeof window !== 'undefined' && window.sessionStorage === sessionStorage;
 }
 
 export function nowIso() {

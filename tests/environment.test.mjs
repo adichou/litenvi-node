@@ -1,5 +1,6 @@
-// buildMockEnvironment 通用面用例：localStorage 注入与只读观测、时钟冻结、跨环境隔离、
-// 未声明调用记账（deny）与环境收口、fs 只读视图联通。项目无关——只测环境自身能力。
+// buildMockEnvironment 通用面用例：Storage 双通道（localStorage / sessionStorage）注入与只读
+// 观测、时钟冻结、跨环境隔离、未声明调用记账（deny）与环境收口、fs 只读视图联通。
+// 项目无关——只测环境自身能力。
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,6 +64,25 @@ t('removeItem 与跨环境隔离：删除后读不到；第二个环境不共享
     await first.dispose();
   }
   console.log('✓ removeItem 与跨环境隔离：删除生效、记忆不串环境');
+});
+
+t('sessionStorage 注入与双通道隔离：VM 内读写独立于 localStorage；观测面同口径只读', async () => {
+  const environment = await boot();
+  try {
+    environment.exports.client.save('k', 'local-v');
+    environment.exports.client.sessionSave('k', 'session-v');
+    assert.equal(environment.exports.client.sessionLoad('k'), 'session-v', 'VM 内会话通道应独立读回');
+    assert.equal(environment.exports.client.load('k'), 'local-v', '本地通道不受会话通道写入影响');
+    assert.equal(environment.sessionStorage.getItem('k'), 'session-v', '会话观测面应读回业务写入');
+    assert.equal(environment.sessionStorage.length, 1, '会话观测面长度应与写入数一致');
+    assert.equal(environment.sessionStorage.setItem, undefined, '观测面不得暴露写方法（写通道仅被测业务自身）');
+    assert.equal(Object.isFrozen(environment.sessionStorage), true, '观测面应冻结');
+    assert.notEqual(environment.localStorage.getItem('k'), 'session-v', '两通道不得串写');
+    assert.equal(environment.exports.client.windowIsSessionChannel(), true, 'window 应为 VM 全局自引用（浏览器同构）');
+  } finally {
+    await environment.dispose();
+  }
+  console.log('✓ sessionStorage 注入与双通道隔离：独立读写、观测面只读');
 });
 
 t('时钟冻结：VM 内 Date 固定为注入的 now；fs 只读视图读回装配期文件', async () => {

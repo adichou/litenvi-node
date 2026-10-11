@@ -1,13 +1,15 @@
-// localStorage 替身与只读视图单测（模块对外方法直测，不依赖 VM 装配）：
+// Storage 替身与只读视图单测（模块对外方法直测，不依赖 VM 装配）：
 // 替身读写 / String 化语义 / 删除清空 / 键序与长度；只读视图与替身联动、无写方法、防扩充。
+// localStorage 与 sessionStorage 在环境内共用本实现（同一 Storage 接口），通道隔离由
+// environment 用例覆盖（每次调用独立实例）。
 import assert from 'node:assert/strict';
-import { createLocalStorageMock, createLocalStorageView } from '../local-storage.mjs';
+import { createStorageMock, createStorageView } from '../browser-storage.mjs';
 
 const cases = [];
 const t = (name, fn) => cases.push([name, fn]);
 
 t('替身读写：setItem/getItem 读回；未设键返回 null；键与值按 String 化存取', () => {
-  const { mock } = createLocalStorageMock();
+  const { mock } = createStorageMock();
   mock.setItem('k', 'v');
   assert.equal(mock.getItem('k'), 'v', '已设键应读回同值');
   assert.equal(mock.getItem('missing'), null, '未设键应返回 null（对齐浏览器语义）');
@@ -17,7 +19,7 @@ t('替身读写：setItem/getItem 读回；未设键返回 null；键与值按 S
 });
 
 t('删除与清空：removeItem 移除单键；clear 全清；key(i) 与 length 随动', () => {
-  const { mock } = createLocalStorageMock();
+  const { mock } = createStorageMock();
   mock.setItem('a', '1');
   mock.setItem('b', '2');
   assert.equal(mock.length, 2, '两条记录长度为 2');
@@ -31,7 +33,7 @@ t('删除与清空：removeItem 移除单键；clear 全清；key(i) 与 length 
 });
 
 t('只读视图：与替身同源联动；不暴露写方法；冻结防扩充', () => {
-  const { mock, view } = createLocalStorageMock();
+  const { mock, view } = createStorageMock();
   mock.setItem('k', 'v');
   assert.equal(view.getItem('k'), 'v', '视图应与替身同源读通');
   assert.equal(view.length, 1, '视图 length 应与替身一致');
@@ -40,7 +42,7 @@ t('只读视图：与替身同源联动；不暴露写方法；冻结防扩充',
   }
   assert.equal(Object.isFrozen(view), true, '视图应冻结防扩充');
 
-  const standalone = createLocalStorageView(new Map([['x', 'y']]));
+  const standalone = createStorageView(new Map([['x', 'y']]));
   assert.equal(standalone.getItem('x'), 'y', '视图工厂可独立包裹任意 Map 存储');
   assert.equal(standalone.length, 1, '独立视图长度正确');
 });

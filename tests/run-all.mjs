@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const files = ['local-storage.test.mjs', 'environment.test.mjs'];
+const files = ['browser-storage.test.mjs', 'environment.test.mjs'];
 
 let failed = 0;
 for (const file of files) {
