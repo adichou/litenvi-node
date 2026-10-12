@@ -7,7 +7,8 @@
     "./*": "./*"
   },
   "files": [
-    "*.mjs"
+    "*.mjs",
+    "*.cjs"
   ],
   "scripts": {
     "test": "node --experimental-vm-modules tests/run-all.mjs"

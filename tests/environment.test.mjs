@@ -115,18 +115,4 @@ t('未声明调用记账与环境收口：deny 进 unexpected，dispose 自动�
   console.log('✓ 未声明调用记账与收口：deny 记账、dispose 自动红');
 });
 
-const failures = cases.reduce((n, [name, fn]) => {
-  try {
-    fn();
-    console.log(`✓ ${name}`);
-    return n;
-  } catch (e) {
-    console.error(`✗ ${name}\n  ${e.stack || e.message}`);
-    return n + 1;
-  }
-}, 0);
-if (failures) {
-  console.error(`\n${cases.length} 个用例，失败 ${failures}`);
-  process.exit(1);
-}
-console.log(`\n全部通过：${cases.length} 用例`);
+await runCases(cases.map(([name, fn]) => Object.defineProperty(fn, 'name', {value:name})));
