@@ -107,6 +107,18 @@ await runCases([
             await env.dispose();
         }
     },
+    /** 场景：子进程 stdin 载荷；输入：stdin 选项与 fd0 读入口 fixture；预期：载荷经 fd 0 到达子进程输出。 */
+    async function nodeChildReceivesStdinPayload() {
+        const env = await boot();
+        try {
+            const result = await env.exports.client.runChild(new URL('./fixtures/stdin-child.mjs', import.meta.url).pathname, [], { stdin: '标准输入载荷' });
+            assert.equal(result.code, 0);
+            assert.equal(result.stdout, 'stdin:标准输入载荷\n');
+        }
+        finally {
+            await env.dispose();
+        }
+    },
     /** 场景：请求查询参数限定故障；输入：同一路径两个参数值；预期：仅目标请求断连，其余仍由真实路由响应。 */
     async function queryScopedFaultAndTransportError() {
         const env = await boot();

@@ -576,6 +576,17 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
     // Node 子进程仍执行真实入口源码；独立 VM / argv / 输出，共享隔离文件与 Git 世界。
     function spawnNodeSource(args, options = {}) {
         const child = Object.assign(new EventEmitter(), { pid: 4245, stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
+        // stdin 选项：子进程 VM 的 node:fs 拦截 readFileSync(0) 返回预置载荷——
+        // 供以 fd 0 读 stdin 的 CLI 入口（如 agent-team-board 守卫薄壳）按真实协议驱动。
+        const stdinPayload = options?.stdin;
+        const childFs = stdinPayload == null ? null : new Proxy(filesystem, {
+            get(target, prop) {
+                if (prop === 'readFileSync')
+                    return (fd, ...rest) => (fd === 0 ? String(stdinPayload) : target.readFileSync(fd, ...rest));
+                const value = Reflect.get(target, prop);
+                return typeof value === 'function' ? value.bind(target) : value;
+            },
+        });
         setImmediate(async () => {
             let code = 0;
             const childProcessMock = { ...processMock, argv: ['/mock/node', ...args], cwd: () => options.cwd || projectRoot, env: { ...processMock.env, ...options.env }, exitCode: 0,
@@ -588,7 +599,7 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
                     return cache.get(identifier);
                 let module;
                 if (identifier.startsWith('node:')) {
-                    const values = identifier === 'node:process' ? childProcessMock : mocks[identifier] || (pureBuiltins.has(identifier) ? await import(identifier) : deny('子进程未注入模块')(identifier));
+                    const values = identifier === 'node:process' ? childProcessMock : (identifier === 'node:fs' && childFs ? childFs : mocks[identifier] || (pureBuiltins.has(identifier) ? await import(identifier) : deny('子进程未注入模块')(identifier)));
                     const exports = { ...values, default: values.default || values };
                     module = new vm.SyntheticModule(Object.keys(exports), function () { for (const [key, value] of Object.entries(exports))
                         this.setExport(key, value); }, { context: childContext, identifier });
