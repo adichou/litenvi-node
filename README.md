@@ -48,3 +48,73 @@ remove();
 隔离的 action 测试进程可用 `node --require litenvi-node/network-guard.cjs ...` 预加载网络 mock；单独运行 action 用例时，测试装配助手也须导入该模块。它封锁宿主原生 fetch、HTTP/HTTPS request/get、TCP connect 与 listen，ESM 具名导出同步到同一 mock。默认 `buildMockEnvironment` 的 VM 装配本身不修改宿主函数。
 
 封锁发生在任何连接/监听之前。即使业务捕获了错误，退出审计仍以非零状态报告原生入口尝试，防止失败回退绕开 mock。`NETWORK_MOCK_SUMMARY` 记录尝试数和通道名称，聚合器须检查每个文件的审计结果为零。该模块只在专用测试进程使用；HTTP 场景和故障仍通过内存传输与 `injectFault` 声明，不通过原生请求制造失败。
+
+## 可选 Playwright 适配层
+
+浏览器装配与内存环境统一从 `environment.mjs` 导入。`playwright.mjs` 承载浏览器实现，资源复制和路由安装均由装配入口内部完成；独立 `files.mjs` 已移除。库不导入或强制安装 Playwright，由调用方注入自己的 `browserType`。
+
+```js
+import { chromium } from '@playwright/test';
+import { buildMockEnvironment, openBrowserEnvironment } from 'litenvi-node/environment.mjs';
+
+const fixture = await openBrowserEnvironment({
+  browserType: chromium,
+  origin: 'http://example.test',
+  url: 'http://example.test/',
+  resources: [{ source: new URL('./web/', import.meta.url), target: '/site' }],
+  initialData(fs) {
+    fs.mkdirSync('/app/data', { recursive: true });
+  },
+  createEnvironment: initialData => buildMockEnvironment({
+    srcRoot, projectRoot, initialData,
+  }),
+});
+try {
+  await fixture.page.getByRole('button', { name: 'Save' }).click();
+  console.log(fixture.requests('POST', '/save'));
+} finally {
+  await fixture.dispose();
+}
+```
+
+`resources` 为可选的 `{source, target}` 数组。源支持路径或 file URL，目标为内存中的 POSIX 绝对路径。全部目录原样复制（保留二进制）后，执行调用方可选的同步 `initialData(fs)`；用例数据可覆盖已复制的资源。目录中的符号链接等非普通条目会被拒绝，没有运行期宿主文件回退。
+
+`createEnvironment` 接收库组合好的初始化回调，需交给环境装配期的 `initialData`（项目包装环境可传给自己的 seed）。有资源或用例数据配置时，工厂若没有执行该回调会报错并清理已返回的环境，避免静默缺资源。没有这两项配置时，仍兼容原来的零参数环境工厂。
+
+返回 `environment/browser/context/page/dispose/requests`。`setup(environment)` 在环境创建后、浏览器启动前执行，可准备 Git 或注入故障；`launchOptions` 与 `contextOptions` 传给浏览器，默认无头，Service Worker 始终禁用。项目 URL、初始数据、选择器和业务断言仍由调用方提供。
+
+路由只接受声明的源，通过内存 HTTP 执行真实服务端，保留方法、路径、查询、正文、状态和响应头；失败记录原始异常并中止，绝不放行到宿主网络。
+
+适配器接管自己创建的环境和浏览器，装配失败自动清理；释放按上下文、浏览器、内存环境的逆序执行，一个关闭失败也继续尝试其余资源。释放幂等，页面、弹窗、路由和清理错误通过 AggregateError 留痕，原始启动错误保留。环境自身检查未声明调用与监听状态，适配器额外检查残留内存请求。
+
+## 原生模块 Mock 进程试点
+
+Node.js 22.12.0 起可通过统一入口选择独立进程后端；默认的 `buildMockEnvironment` 仍使用 VM。
+
+```js
+import { buildProcessEnvironment, openBrowserEnvironment } from 'litenvi-node/environment.mjs';
+
+const fixture = await openBrowserEnvironment({
+  browserType: chromium, origin: 'http://example.test', url: 'http://example.test/',
+  resources: [{ source: new URL('./web/', import.meta.url), target: '/site' }],
+  createEnvironment: initialData => buildProcessEnvironment({ srcRoot, projectRoot, initialData }),
+});
+try {
+  await fixture.page.getByRole('button', { name: 'Save' }).click();
+  console.log(fixture.environment.fs.readTextFile('/app/config.json'));
+} finally { await fixture.dispose(); }
+```
+
+每个环境启动一个业务子进程，由库内部添加 `--experimental-test-module-mocks`。整个业务依赖图使用普通 ESM 加载；`mock.module()` 替换 fs（包括 fs/promises）、child_process、HTTP 等边界，复用现有 memfs、Git 和 FakeTimers。业务进程的全局 Date、timer、process 和 fetch 指向隔离环境；Playwright 与测试父进程保留真实时间。父进程不需要 `--experimental-vm-modules`，也不依赖 `registerHooks`。
+
+输入支持 `srcRoot/projectRoot/env/now/initialStorage/initialData`，`timeoutMs` 是真实时间下的 IPC 预算（默认 10 秒）。返回 `runtime: 'process'`、真实子进程 `pid`、`http.request/requests/pendingCount/injectFault`、只读 `fs`、`git.log()`、`logs/unexpected`、`clock.now/countTimers/tickAsync()`、`refresh()` 和 `dispose()`。请求、推进、刷新和故障注入均需 await。
+
+父进程的文件、Git 和请求观测来自 IPC 快照，在操作完成后更新；要观测尚未完成的业务动作，先 `await environment.refresh()`。文件快照只传变化内容，保留 Buffer；试点不传递权限、符号链接或时间戳语义。父进程没有写文件、调用业务导出、VM evaluate 或 Git 装配的运行期接口。
+
+跨进程不能发送函数、Promise 或 AbortSignal。HTTP 故障只支持可序列化参数；`injectFault()` 返回 `Promise<移除函数>`（撤销经 removeFault 消息调子进程侧句柄，幂等），`wait` 为真 Promise 时注册为 gateId 闸门、落定后自动放行——60 秒级长挂起用例需抬高 `timeoutMs`（IPC 预算默认 10 秒）。`failWrite`、`sideEntries` 尚未接入原生后端。Git 观测含 `log()` / `isCommitted(pathspec)`（committed 清单随快照回传）。
+
+### 原生虚拟 Node 子进程
+
+业务代码 `spawn('/mock/node', [entry, ...args])` 在原生后端同样可用：fork 出独立进程以同一套世界装配（`runChildWorld`）执行真实入口源码——进程边界即模块缓存边界，每次 spawn 都重新加载依赖图；子进程拥有独立 argv / stdout / stderr / exit 语义（`process.exit` 与 `process.exitCode` 都折算为退出码）。世界共享按「fork 时快照进入、退出快照回流」实现：入口可见父世界 fs / Git / 时钟现值，结束后写入、删除（含按 fork 快照判定的删除）与 Git 状态整体回流父世界；子世界内的未声明调用逐条并入父世界记账，收口不放过。失败路径同样回流部分写入的世界事实。`stdin` 选项沿用 VM 口径（子世界以 fd 0 `readFileSync` 读到预置载荷）。子世界独立 FakeTimers 无人推进：入口若等待自身定时器会挂起，适用于 CLI 型同步入口。
+
+清理会取消在途内存请求、恢复业务全局、清空快照并等待子进程退出；重复清理复用同一结果。未声明调用、异常退出、通信超时或需要强制终止的进程都不能误报通过。模块白名单用于测试边界检查；普通 Node 子进程与 module Mock 不提供运行不可信代码的安全沙箱。

@@ -21,7 +21,7 @@ export class ResponseHeaders {
     entries() { return this.#values.entries(); }
     [Symbol.iterator]() { return this.entries(); }
 }
-export function createHttpTransport({ deny, clock }) {
+export function createHttpTransport({ deny, clock, onSettle, onObserve }) {
     const requests = [], faults = [], pending = new Set();
     let server = null, disposed = false;
     const httpMock = {
@@ -64,7 +64,7 @@ export function createHttpTransport({ deny, clock }) {
         if (!server?.listening)
             return Promise.reject(new Error('主入口必须启动 HTTP 服务'));
         const url = new URL(pathname, BASE), record = { method: String(method).toUpperCase(), path: url.pathname, query: url.search, body, signal: options.signal, source: options.source || 'request', dispatched: false };
-        requests.push(record);
+        requests.push(record); onObserve?.();
         const selected = matching(record);
         for (const fault of selected)
             if (fault.once)
@@ -75,7 +75,7 @@ export function createHttpTransport({ deny, clock }) {
             const clear = () => { for (const timer of timers)
                 clock.clearTimeout(timer); signal?.removeEventListener('abort', abort); pending.delete(cancel); };
             const finish = (fn, value) => { if (settled)
-                return; settled = true; clear(); fn(value); };
+                return; settled = true; clear(); fn(value); onSettle?.(); };
             const cancel = () => { finish(reject, namedError('AbortError', '环境释放，请求取消')); req?.destroy(); res?.destroy(); };
             const abort = () => { finish(reject, signal.reason || namedError('AbortError', '请求取消')); req?.destroy(); res?.destroy(); };
             pending.add(cancel);

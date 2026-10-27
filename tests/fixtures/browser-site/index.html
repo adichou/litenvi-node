@@ -1,0 +1,10 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Memory browser example</title></head>
+<body><button id="save">Save</button><output id="result"></output>
+<script>
+document.querySelector('#save').addEventListener('click', async () => {
+  const response = await fetch('/echo', {method: 'POST', body: 'saved'});
+  const data = await response.json();
+  document.querySelector('#result').textContent = `${data.posts}:${data.body}`;
+});
+</script></body></html>

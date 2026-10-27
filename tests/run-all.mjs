@@ -6,11 +6,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const files = ['browser-storage.test.mjs', 'environment.test.mjs', 'http-faults.test.mjs', 'network-guard.test.mjs'];
+const files = ['browser-storage.test.mjs', 'environment.test.mjs', 'environment-assembly.test.mjs', 'files.test.mjs', 'http-faults.test.mjs', 'network-guard.test.mjs', 'playwright.test.mjs', 'process-child.test.mjs', 'toolchain-matrix.test.mjs', 'process-environment.test.mjs', 'process-protocol.test.mjs', 'process-worker.test.mjs', 'process-worker-send.test.mjs'];
 
 let failed = 0;
 for (const file of files) {
-  const r = spawnSync(process.execPath, ['--experimental-vm-modules', path.join(here, file)], {
+  const r = spawnSync(process.execPath, ['--experimental-vm-modules', '--experimental-test-module-mocks', path.join(here, file)], {
     stdio: 'inherit',
     env: { ...process.env, TZ: 'Asia/Shanghai' },
   });

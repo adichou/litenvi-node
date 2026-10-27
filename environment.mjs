@@ -8,6 +8,9 @@ import realFs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import vm from 'node:vm';
+// fork 在本文件顶层静态导入：宿主 / 业务子进程 / 原生虚拟子进程都先加载本模块再安装模块替身，
+// 拿到的始终是真实 fork（业务代码看到的 node:child_process 由 mock.module 替换，不受影响）。
+import { fork } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -17,6 +20,14 @@ import { createFsView } from './fs.mjs';
 import { createGitView } from './git.mjs';
 import { createHttpTransport, ResponseHeaders } from './http.mjs';
 import { createStorageMock } from './browser-storage.mjs';
+import { loadNativeModules } from './native-modules.mjs';
+// 统一对外入口：浏览器实现保留在独立模块，Playwright 仍由调用方注入。
+export { openBrowserEnvironment } from './playwright.mjs';
+export { buildProcessEnvironment } from './process-environment.mjs';
+// 模块加载即留存宿主真实进程引用：业务世界（worker / 原生虚拟子进程）会替换全局 process，
+// 原生子进程是真实 OS 进程——其 fork 必须携带宿主真实 env（NODE_OPTIONS 采集钩子、
+// ATB_* 自证清单等测试基建通道），而不是业务替身的精简 env。
+const hostProcess = process;
 // 可控写入故障开关：维护一个目标片段集合（子串匹配），命中任一片段即视为应注入写入失败。
 // 片段可在用例运行中动态增删（故障解除后重试、只对指定目标故障等场景）；本身不含任何
 // 业务路径语义，调用方把项目专属的基础谓词与 matches 组合后传给 buildMockEnvironment
@@ -60,12 +71,21 @@ export function createElement(tag = 'div') {
         getAttribute(name) { return attributes.has(String(name)) ? attributes.get(String(name)) : null; },
     };
 }
-export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, initialData, failWrite, now = '2026-10-08T04:00:00.000Z', sideEntries, initialStorage = {}, } = {}) {
+export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, initialData, failWrite, now = '2026-10-08T04:00:00.000Z', sideEntries, initialStorage = {}, loadModules, onHttpSettle, onHttpObserve,
+    // 原生虚拟 Node 子进程（runChildWorld）所需的世界参数化项——默认值保持既有语义不变：
+    // serve=false 跳过「主入口必须启动 HTTP 服务」等待（CLI 入口不监听）；processOverrides
+    // 覆写 process 替身的 argv/stdout/stderr/exit 等（子进程口径）；initialGit 以父世界快照
+    // 预置 Git 沙盒；stdin 为 fd 0 readFileSync 载荷；capture 把闭包观测（unexpected/git 快照/
+    // process 替身）交给调用方——装配失败路径下环境对象不返回，靠它仍能取到最终状态。
+    serve = true, processOverrides = null, initialGit = null, stdin = null, capture = null,
+    // 子进程世界专用：dispose 不抹除内存卷——失败路径（入口抛错触发装配 catch 内收口）也要
+    // 保留 fs 现值回流父世界（部分写入同样是世界事实）；主世界保持销毁语义不变。
+    preserveOnDispose = false, } = {}) {
     if (!srcRoot)
         throw new Error('buildMockEnvironment 需要显式传入 srcRoot（生产入口源码文件路径，其所在目录即源码加载边界）。');
     if (!projectRoot)
         throw new Error('buildMockEnvironment 需要显式传入 projectRoot（Mock 世界的虚拟项目根，与调用方业务路径同源）。');
-    if (!vm.SourceTextModule)
+    if (!loadModules && !vm.SourceTextModule)
         throw new Error('请通过聚合入口运行，或给 Node 添加 --experimental-vm-modules。');
     const srcRootDir = path.dirname(srcRoot);
     const volume = new Volume();
@@ -79,6 +99,7 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
     const logs = [];
     let sideEntriesFace = {};
     let disposed = false;
+    let restoreModules = () => {};
     function deny(label) {
         return (...args) => {
             const error = new Error(`未声明的环境调用：${label} ${JSON.stringify(args.slice(0, 2))}`);
@@ -87,7 +108,7 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         };
     }
     // 假 HTTP 传输层：服务端不绑定真实端口，客户端 request() 直调内存流（见 request.mjs）。
-    const transport = createHttpTransport({ deny, clock });
+    const transport = createHttpTransport({ deny, clock, onSettle: onHttpSettle, onObserve: onHttpObserve });
     const writeFileSync = filesystem.writeFileSync.bind(filesystem);
     filesystem.writeFileSync = (target, ...args) => {
         if (failWrite && typeof target === 'string' && failWrite(target)) {
@@ -108,6 +129,25 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
     let currentBranch = 'main';
     const bornBranches = new Set();
     const worktrees = new Set();
+    // Git 沙盒整体快照 / 回填：原生子进程世界以「fork 时快照进入、退出快照回流」共享 Git
+    // 状态（VM 口径的子 VM 直接共享闭包对象，原生以进程边界换快照传递，语义等价）。
+    const gitSnapshot = () => ({ log: gitLog.map((entry) => ({ ...entry })), committed: [...committedPaths],
+        born: [...bornBranches], branch: currentBranch, worktrees: [...worktrees] });
+    const gitRestore = (snapshot) => {
+        gitLog.splice(0, gitLog.length, ...snapshot.log);
+        committedPaths.clear();
+        for (const item of snapshot.committed)
+            committedPaths.add(item);
+        bornBranches.clear();
+        for (const item of snapshot.born)
+            bornBranches.add(item);
+        worktrees.clear();
+        for (const item of snapshot.worktrees)
+            worktrees.add(item);
+        currentBranch = snapshot.branch;
+    };
+    if (initialGit)
+        gitRestore(initialGit);
     // 整树工作区状态（workingTreeSnapshot 用的无 pathspec status）：遍历项目根，
     // 排除 .git / node_modules / 根 .gitignore 前缀规则与已提交路径；沙盒只有未跟踪（??）一种脏形态。
     const listUncommittedFiles = () => {
@@ -153,6 +193,20 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         };
         walk(projectRoot, '');
         return out.sort();
+    };
+    // 索引清单查询（差异端点判定文件是否已跟踪）——真实 git 语义：ls-files 只列索引内容，
+    // 未跟踪路径输出为空且退出 0（沙盒索引即已提交集合，含目录前缀展开）。独立于 fakeGit
+    // 分发：fakeGit 保持既有文本与命令序列口径，扩展命令经 wrapper 进出。
+    const gitLsFiles = (args) => {
+        const p = args.slice(args.indexOf('--') + 1)[0];
+        const tracked = [...committedPaths].filter((c) => c === p || c.startsWith(`${p}/`));
+        return { status: 0, stdout: tracked.map((c) => `${c}\n`).join(''), stderr: '' };
+    };
+    const dispatchGit = (argv) => {
+        const args = argv[0] === '--no-optional-locks' ? argv.slice(1) : argv;
+        // --error-unmatch 形态归 fakeGit 的 pathspec 可匹配性判定（128 语义），索引清单
+        // 查询只接无 --error-unmatch 的形式——两者的退出码语义相反，误拦会破坏上层容错链。
+        return args[0] === 'ls-files' && args.includes('--') && !args.includes('--error-unmatch') ? gitLsFiles(args) : fakeGit(argv);
     };
     const fakeGit = (argv) => {
         const readonly = argv[0] === '--no-optional-locks';
@@ -405,7 +459,7 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
             // 异步执行器消费 close/stdout/stderr）；npm test 立即「跑完」（异步 emit 输出与退出码，
             // 默认 0，可经 setCommandExitCode 切换）；其余命令仍按未声明调用记账。
             if (command === 'git' && (options?.cwd === projectRoot || worktrees.has(options?.cwd) || (args[0] === '-C' && args[1] === projectRoot))) {
-                const result = fakeGit(args[0] === '-C' ? args.slice(2) : args);
+                const result = dispatchGit(args[0] === '-C' ? args.slice(2) : args);
                 const child = new EventEmitter();
                 child.pid = 4244;
                 child.stdout = new EventEmitter();
@@ -472,7 +526,7 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         },
         spawnSync(command, args, options) {
             if (command === 'git' && (options?.cwd === projectRoot || worktrees.has(options?.cwd) || (args[0] === '-C' && args[1] === projectRoot)))
-                return fakeGit(args[0] === '-C' ? args.slice(2) : args);
+                return dispatchGit(args[0] === '-C' ? args.slice(2) : args);
             if (command === 'git' && options?.cwd && filesystem.existsSync(path.join(options.cwd, '.git'))) {
                 if (args[0] === 'rev-parse' && args[1] === '--show-toplevel')
                     return { status: 0, stdout: options.cwd + '\n', stderr: '' };
@@ -500,7 +554,14 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         cwd: () => projectRoot, pid: 4242, platform: 'darwin', arch: 'arm64',
         execPath: '/mock/node', argv: ['/mock/node', srcRoot],
         kill: deny('process.kill'), exit: deny('process.exit'),
+        // stdout/stderr 缺省汇入服务日志（console 亦经此通道，语义与既有 logs 记账一致）；
+        // 虚拟子进程世界经 processOverrides 替换为事件流——console 随之改走子进程输出。
+        stdout: { write: (text) => { logs.push(String(text).replace(/\n$/, '')); return true; } },
+        stderr: { write: (text) => { logs.push(String(text).replace(/\n$/, '')); return true; } },
+        exitCode: 0,
     });
+    if (processOverrides)
+        Object.assign(processMock, processOverrides);
     let randomSequence = 0;
     const cryptoMock = {
         ...crypto,
@@ -518,16 +579,32 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         localStorageMock.setItem(key, value);
     for (const [key, value] of Object.entries(initialStorage.session || {}))
         sessionStorageMock.setItem(key, value);
+    // stdin 载荷（fd 0 readFileSync）：包装业务可见的 node:fs——以 fd 0 读取时返回预置载荷，
+    // 其余调用原样透传（与 VM 子进程的 childFs 同一手法）；观测面与播种仍用原始 filesystem。
+    const businessFs = stdin == null ? filesystem : Object.assign({}, 
+        Object.fromEntries(Object.getOwnPropertyNames(filesystem).map((name) => {
+            const value = filesystem[name];
+            return [name, typeof value === 'function' ? value.bind(filesystem) : value];
+        })),
+        { readFileSync: (fd, ...rest) => (fd === 0 ? String(stdin) : filesystem.readFileSync(fd, ...rest)) });
+    // console 双通道（log → stdout，error/warn → stderr）：主世界即汇入服务日志（与既有
+    // 口径一致），子进程世界覆写 process 后 console 自然改走子进程输出（与 VM 子进程同构）；
+    // warn 与 error 复用同一函数（同一通道，避免不可达的重复节点）。
+    const consoleStdout = (...args) => processMock.stdout.write(args.join(' ') + '\n');
+    const consoleStderr = (...args) => processMock.stderr.write(args.join(' ') + '\n');
     const mocks = {
-        'node:fs': filesystem, 'node:child_process': childProcess, 'node:crypto': cryptoMock,
+        'node:fs': businessFs, 'node:child_process': childProcess, 'node:crypto': cryptoMock,
         'node:os': osMock, 'node:http': transport.httpMock,
         'node:https': { request: deny('https.request'), get: deny('https.get') },
         'node:net': { createServer: deny('net.createServer'), connect: deny('net.connect'), createConnection: deny('net.createConnection') },
     };
-    const context = vm.createContext({
+    const globalValues = {
         process: processMock, Buffer, URL, URLSearchParams,
         Headers: ResponseHeaders, AbortController, AbortSignal: { timeout(ms) { const c = new AbortController(); clock.setTimeout(() => c.abort(Object.assign(new Error('请求超时'), { name: 'TimeoutError' })), ms); return c.signal; } },
-        console: { log: (...args) => logs.push(args.join(' ')), error: (...args) => logs.push(args.join(' ')), warn: (...args) => logs.push(args.join(' ')) },
+        // console 经 process 替身的 stdout/stderr 走：主世界即汇入服务日志（与既有口径一致），
+        // 子进程世界覆写 process 后 console 自然改走子进程输出（与 VM 子进程同构）；
+        // warn 与 error 复用同一函数（同一通道，避免不可达的重复节点）。
+        console: { log: consoleStdout, error: consoleStderr, warn: consoleStderr },
         Date: clock.Date, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
         setInterval: clock.setInterval, clearInterval: clock.clearInterval,
         // fetch 替身：前端代码（action 层）的全局通道——同源相对路径直达内存传输层（同 VM 的
@@ -535,7 +612,8 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         fetch: transport.fetch,
         localStorage: initialStorage.local === null ? null : localStorageMock,
         sessionStorage: initialStorage.session === null ? null : sessionStorageMock,
-    });
+    };
+    const context = loadModules ? globalValues : vm.createContext(globalValues);
     // 浏览器同构：window 即全局——前端代码（View 与 View–Action 模块）经 window.* 直连通道
     // （window.ATBActions / window.ATBOncall 等）访问挂载面；自引用使其在 VM 内成立。
     context.window = context;
@@ -573,8 +651,64 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         modules.set(identifier, module);
         return module;
     }
+    // 原生试点虚拟 Node 子进程：fork 独立进程装配同一套世界（loadModules 原生模块替身）执行
+    // 入口源码——进程边界即模块缓存边界，每次 spawn 都拿到全新模块实例（与 VM 子进程口径一致）。
+    // 世界共享以「fork 时快照进入、退出快照回流」实现：入口执行可见父世界 fs / Git 现值，结束后
+    // 增量改动（含删除）与 Git 状态整体回流本世界；子世界的未声明调用也逐条并入本世界记账。
+    function spawnNativeNodeChild(args, options) {
+        const forkState = { files: volume.toJSON(), git: gitSnapshot() };
+        const childEnv = { ...hostProcess.env };
+        delete childEnv.NODE_TEST_CONTEXT;
+        const proc = fork(fileURLToPath(new URL('./process-child.mjs', import.meta.url)), [], {
+            execArgv: ['--experimental-test-module-mocks'], serialization: 'advanced',
+            env: childEnv, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+        });
+        // kill 透传真实信号：fork 是真进程，no-op 会留下孤儿（VM 口径的子 VM 随世界消亡，
+        // 原生必须显式终止）；被杀后走「未收 done」的异常退出口径。
+        const child = Object.assign(new EventEmitter(), { pid: 4246, stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => proc.kill() });
+        let exitCode = 1, settled = false;
+        proc.on('message', (message) => {
+            if (message.stream === 'stdout') {
+                child.stdout.emit('data', Buffer.from(message.chunk));
+                return;
+            }
+            if (message.stream === 'stderr') {
+                child.stderr.emit('data', Buffer.from(message.chunk));
+                return;
+            }
+            settled = true;
+            exitCode = message.exitCode || 0;
+            // fs 回流：先按 fork 快照清理子世界删除的文件（fromJSON 只合并不删除），再并入最终树。
+            for (const file of Object.keys(forkState.files))
+                if (!(file in message.files) && volume.existsSync(file))
+                    volume.rmSync(file, { recursive: true, force: true });
+            volume.fromJSON(message.files);
+            gitRestore(message.git);
+            for (const item of message.unexpected)
+                unexpected.push(`原生子进程：${item}`);
+        });
+        const finish = (code, signal) => {
+            if (!settled) {
+                exitCode = 1;
+                unexpected.push(`原生子进程异常退出：code=${code} signal=${signal}`);
+            }
+            child.emit('exit', exitCode, null);
+            child.emit('close', exitCode, null);
+        };
+        // 复用 finish 而非独立 error 回调：error 事件把错误对象作为 code 传入，走
+        // 「未收 done」分支同样落记账与 exit/close —— 不新增不可达函数（覆盖率自证口径）
+        proc.on('error', finish);
+        proc.on('exit', finish);
+        proc.send({ srcRoot: fileURLToPath(pathToFileURL(args[0])), projectRoot,
+            env: { ...processMock.env, ...options?.env }, now: new Date(clock.now).toISOString(),
+            files: forkState.files, git: forkState.git, args, cwd: options?.cwd, stdin: options?.stdin });
+        return child;
+    }
+
     // Node 子进程仍执行真实入口源码；独立 VM / argv / 输出，共享隔离文件与 Git 世界。
     function spawnNodeSource(args, options = {}) {
+        if (loadModules)
+            return spawnNativeNodeChild(args, options);
         const child = Object.assign(new EventEmitter(), { pid: 4245, stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
         // stdin 选项：子进程 VM 的 node:fs 拦截 readFileSync(0) 返回预置载荷——
         // 供以 fd 0 读 stdin 的 CLI 入口（如 agent-team-board 守卫薄壳）按真实协议驱动。
@@ -638,34 +772,48 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         if (disposed)
             return;
         disposed = true;
-        clock.reset();
-        processMock.removeAllListeners();
-        await transport.close();
-        volume.reset();
-        assert.equal(clock.countTimers(), 0, '环境清理后不得残留定时任务');
-        assert.ok(!transport.isListening(), '环境清理后服务必须关闭');
-        // 收口自动检查：用例无须显式调用，任何未声明的环境调用都在这里红。
-        assert.deepEqual(unexpected, [], `环境收口：不得有未声明的环境调用：${unexpected.join('; ')}；服务日志：\n${logs.join('\n')}`);
+        try {
+            clock.reset();
+            processMock.removeAllListeners();
+            await transport.close();
+            if (!preserveOnDispose)
+                volume.reset();
+            assert.equal(clock.countTimers(), 0, '环境清理后不得残留定时任务');
+            assert.ok(!transport.isListening(), '环境清理后服务必须关闭');
+            // 收口自动检查：用例无须显式调用，任何未声明的环境调用都在这里红。
+            assert.deepEqual(unexpected, [], `环境收口：不得有未声明的环境调用：${unexpected.join('; ')}；服务日志：\n${logs.join('\n')}`);
+        } finally { restoreModules(); }
     }
+    // capture：入口执行前把闭包观测交给调用方——装配失败路径环境对象不返回（catch 内已
+    // dispose 并重抛），子进程世界仍需取到最终 fs / git / unexpected / process 替身状态。
+    if (capture)
+        Object.assign(capture, { unexpected, logs, gitSnapshot, face: processMock });
     try {
-        const entry = await loadModule(pathToFileURL(srcRoot).href);
-        await entry.link((specifier, parent) => loadModule(specifier.startsWith('node:')
-            ? specifier : new URL(specifier, parent.identifier).href));
-        await entry.evaluate();
-        // 附加源码入口（如前端 action 模块）：与主入口同一加载边界与依赖图，加载后把模块
-        // 命名空间经返回面 exports 交给用例——测试直接调用 VM 内的真实源码导出。
-        const exports = { entry: entry.namespace };
-        for (const item of sideEntries || []) {
-            const module = await loadModule(pathToFileURL(item.file).href);
-            if (module.status === 'unlinked')
-                await module.link((specifier, parent) => loadModule(specifier.startsWith('node:')
-                    ? specifier : new URL(specifier, parent.identifier).href));
-            if (module.status === 'linked')
-                await module.evaluate();
-            exports[item.key] = module.namespace;
+        if (loadModules) {
+            const loaded = await loadModules({ srcRoot, mocks, globals: context, unexpected });
+            restoreModules = loaded.restore;
+            sideEntriesFace = Object.freeze(loaded.exports);
+        } else {
+            const entry = await loadModule(pathToFileURL(srcRoot).href);
+            await entry.link((specifier, parent) => loadModule(specifier.startsWith('node:')
+                ? specifier : new URL(specifier, parent.identifier).href));
+            await entry.evaluate();
+            // 附加源码入口与主入口使用同一加载边界和依赖图。
+            const exports = { entry: entry.namespace };
+            for (const item of sideEntries || []) {
+                const module = await loadModule(pathToFileURL(item.file).href);
+                if (module.status === 'unlinked')
+                    await module.link((specifier, parent) => loadModule(specifier.startsWith('node:')
+                        ? specifier : new URL(specifier, parent.identifier).href));
+                if (module.status === 'linked')
+                    await module.evaluate();
+                exports[item.key] = module.namespace;
+            }
+            sideEntriesFace = Object.freeze(exports);
         }
-        await transport.waitForListening();
-        sideEntriesFace = Object.freeze(exports);
+        // 主入口必须启动 HTTP 服务（serve=false 为 CLI 子进程世界：入口不监听，跳过等待）。
+        if (serve)
+            await transport.waitForListening();
     }
     catch (error) {
         try {
@@ -699,10 +847,52 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         // （request 动作 + requests 流水账）。
         unexpected, logs,
         fs: createFsView(filesystem),
-        git: Object.freeze({ ...createGitView(gitLog, committedPaths), run: args => fakeGit(args) }),
+        git: Object.freeze({ ...createGitView(gitLog, committedPaths), run: args => dispatchGit(args) }),
         http: Object.freeze({ request: transport.request, requests: transport.requests, injectFault: transport.injectFault, pendingCount: transport.pendingCount, isListening: transport.isListening }),
         // localStorage / sessionStorage 只读视图：断言被测业务的键值记忆写入（写通道仅被测业务自身）
         localStorage: localStorageView,
         sessionStorage: sessionStorageView,
     };
+}
+
+// 原生试点虚拟 Node 子进程世界装配（process-child.mjs 运行器的进程内入口）：
+// 与 VM 口径对齐——独立 argv / stdout / stderr / exit 语义，真实入口源码在全新模块缓存中
+// 执行，fs / Git 世界经快照进出。本函数不 dispose：CLI 世界随进程退出消亡（VM 子进程同
+// 样无收口断言）；入口失败或 process.exit 哨兵都折算为退出码，最终状态经结果对象回流。
+export async function runChildWorld({ srcRoot, projectRoot, env, now, files, git, args, cwd, stdin, onStream }) {
+    const capture = {};
+    const stream = (channel, text) => onStream(channel, String(text));
+    const exitSentinel = Object.assign(new Error('虚拟子进程退出'), { childExit: null });
+    const processOverrides = {
+        env,
+        argv: ['/mock/node', srcRoot, ...args.slice(1)],
+        cwd: () => cwd,
+        stdout: { write: (text) => { stream('stdout', text); return true; } },
+        stderr: { write: (text) => { stream('stderr', text); return true; } },
+        exit: (status) => { exitSentinel.childExit = status ?? 0; throw exitSentinel; },
+        exitCode: 0,
+    };
+    let volumeRef = null;
+    let exitCode = 0, runError = null;
+    try {
+        await buildMockEnvironment({ srcRoot, projectRoot, env, now, serve: false,
+            loadModules: loadNativeModules, processOverrides, initialGit: git, stdin, capture, preserveOnDispose: true,
+            initialData(filesystem) {
+                filesystem.__vol.fromJSON(files);
+                volumeRef = filesystem.__vol;
+            } });
+    }
+    catch (error) {
+        runError = error;
+        if (error === exitSentinel || error?.cause === exitSentinel)
+            exitCode = exitSentinel.childExit;
+        else {
+            exitCode = 1;
+            stream('stderr', `${error.message}\n`);
+        }
+    }
+    if (exitCode === 0)
+        exitCode = capture.face?.exitCode || 0;
+    return { exitCode, files: volumeRef.toJSON(), git: capture.gitSnapshot(),
+        unexpected: [...capture.unexpected] };
 }

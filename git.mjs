@@ -9,5 +9,7 @@ export function createGitView(gitLog, committedPaths) {
       }));
     },
     isCommitted(pathspec) { return committedPaths.has(pathspec); },
+    // 已入库 pathspec 全量清单：process 后端经 IPC 快照整面回传父进程观测。
+    committed() { return [...committedPaths]; },
   });
 }
