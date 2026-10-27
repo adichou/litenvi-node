@@ -23,15 +23,68 @@ export class ResponseHeaders {
 }
 export function createHttpTransport({ deny, clock, onSettle, onObserve }) {
     const requests = [], faults = [], pending = new Set();
-    let server = null, disposed = false;
+    let server = null, disposed = false, listeningPort = null;
+    // 世界内 Node http 客户端（回调式，如 CLI 对守护进程的探活）只放行 loopback 同端口：
+    // 命中即经内存传输路由真实路由（故障注入同口径生效，流水账 source=client）；端口不符或
+    // 未监听按 ECONNREFUSED 拒连（守护进程探活冷启动的真实语义）；非 loopback 地址仍记账拒绝。
+    const loopback = new Set(['127.0.0.1', 'localhost', '::1']);
     const httpMock = {
-        request: deny('http.request'), get: deny('http.get'),
+        request(options, callback) {
+            const config = typeof options === 'string' || options instanceof URL ? new URL(options) : (options || {});
+            const host = String(config instanceof URL ? config.hostname : (config.hostname ?? config.host ?? '127.0.0.1'));
+            if (!loopback.has(host))
+                return deny('http.request')(options);
+            const port = Number(config.port) || listeningPort;
+            const target = config instanceof URL ? config.pathname + config.search : (config.path || '/');
+            const method = String(config.method || 'GET').toUpperCase();
+            const req = new EventEmitter();
+            const chunks = [];
+            let ended = false, aborted = false;
+            req.write = (chunk) => { chunks.push(String(chunk)); return req; };
+            req.end = (body) => {
+                if (body !== undefined && body !== null)
+                    chunks.push(String(body));
+                if (ended)
+                    return req;
+                ended = true;
+                if (!server?.listening || port !== listeningPort) {
+                    queueMicrotask(() => req.emit('error', Object.assign(new Error(`connect ECONNREFUSED 127.0.0.1:${port ?? listeningPort ?? ''}`), { code: 'ECONNREFUSED', syscall: 'connect' })));
+                    return req;
+                }
+                request(method, target, chunks.join('') || undefined, { source: 'client', timeoutMs: config.timeout ?? null })
+                    .then((response) => {
+                    if (aborted)
+                        return;
+                    const res = new EventEmitter();
+                    res.statusCode = response.status;
+                    res.headers = response.headers;
+                    callback?.(res);
+                    req.emit('response', res);
+                    queueMicrotask(() => {
+                        res.emit('data', response.text ?? (response.json === null ? '' : JSON.stringify(response.json)));
+                        res.emit('end');
+                    });
+                })
+                    .catch((error) => { if (!aborted)
+                    req.emit('error', error); });
+                return req;
+            };
+            req.destroy = () => { aborted = true; };
+            return req;
+        },
+        get(options, callback) {
+            const config = typeof options === 'string' || options instanceof URL ? options : { ...options, method: 'GET' };
+            const req = httpMock.request(config, callback);
+            req.end();
+            return req;
+        },
         createServer(handler) {
             if (server)
                 return deny('额外 HTTP 服务')();
             server = Object.assign(new EventEmitter(), {
                 listening: false, handler,
-                listen(_port, _host, ready) { this.listening = true; if (ready)
+                listen(_port, _host, ready) { if (Number.isFinite(Number(_port)))
+                    listeningPort = Number(_port); this.listening = true; if (ready)
                     queueMicrotask(ready); queueMicrotask(() => this.emit('listening')); return this; },
                 close(cb) { const active = this.listening; this.listening = false; if (cb)
                     queueMicrotask(() => cb(active ? null : Object.assign(new Error('ERR_SERVER_NOT_RUNNING'), { code: 'ERR_SERVER_NOT_RUNNING' }))); queueMicrotask(() => this.emit('close')); return this; },

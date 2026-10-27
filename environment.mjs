@@ -595,6 +595,9 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
     const mocks = {
         'node:fs': businessFs, 'node:child_process': childProcess, 'node:crypto': cryptoMock,
         'node:os': osMock, 'node:http': transport.httpMock,
+        // process 模块与 fs 同机制注入：import node:process 与全局 process 拿到同一隔离替身
+        // （cwd 返回 projectRoot、env 为装配注入值），不再回退宿主真实进程。
+        'node:process': processMock,
         'node:https': { request: deny('https.request'), get: deny('https.get') },
         'node:net': { createServer: deny('net.createServer'), connect: deny('net.connect'), createConnection: deny('net.createConnection') },
     };
@@ -621,7 +624,7 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
     for (const name of ['fetch', 'process', 'Date', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Headers', 'AbortController', 'AbortSignal', 'window', 'localStorage', 'sessionStorage'])
         Object.defineProperty(context, name, { writable: false, configurable: false });
     const modules = new Map();
-    const pureBuiltins = new Set(['node:path', 'node:url', 'node:util']);
+    const pureBuiltins = new Set(['node:path', 'node:url', 'node:util', 'node:events']);
     async function loadModule(identifier) {
         if (modules.has(identifier))
             return modules.get(identifier);
@@ -647,6 +650,16 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         const module = new vm.SourceTextModule(realFs.readFileSync(filename, 'utf8'), {
             context, identifier,
             initializeImportMeta(meta) { meta.url = identifier; },
+            // 主入口 top-level await import()（如 CLI 顶层 await import('node:http')）与静态
+            // import 同一加载边界：动态导入也经 loadModule 走模块替身（与子进程加载器同构）。
+            importModuleDynamically: async (specifier, parent) => {
+                const target = await loadModule(specifier.startsWith('node:') ? specifier : new URL(specifier, parent.identifier).href);
+                if (target.status === 'unlinked')
+                    await target.link((name, ref) => loadModule(name.startsWith('node:') ? name : new URL(name, ref.identifier).href));
+                if (target.status === 'linked')
+                    await target.evaluate();
+                return target;
+            },
         });
         modules.set(identifier, module);
         return module;
@@ -665,7 +678,7 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         });
         // kill 透传真实信号：fork 是真进程，no-op 会留下孤儿（VM 口径的子 VM 随世界消亡，
         // 原生必须显式终止）；被杀后走「未收 done」的异常退出口径。
-        const child = Object.assign(new EventEmitter(), { pid: 4246, stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => proc.kill() });
+        const child = Object.assign(new EventEmitter(), { pid: 4246, stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => proc.kill(), unref: () => {} });
         let exitCode = 1, settled = false;
         proc.on('message', (message) => {
             if (message.stream === 'stdout') {
@@ -709,7 +722,7 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
     function spawnNodeSource(args, options = {}) {
         if (loadModules)
             return spawnNativeNodeChild(args, options);
-        const child = Object.assign(new EventEmitter(), { pid: 4245, stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
+        const child = Object.assign(new EventEmitter(), { pid: 4245, stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true, unref: () => {} });
         // stdin 选项：子进程 VM 的 node:fs 拦截 readFileSync(0) 返回预置载荷——
         // 供以 fd 0 读 stdin 的 CLI 入口（如 agent-team-board 守卫薄壳）按真实协议驱动。
         const stdinPayload = options?.stdin;

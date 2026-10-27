@@ -44,7 +44,7 @@ export async function loadNativeModules({ srcRoot, mocks, globals, unexpected })
       contexts.push(mock.module(name, { defaultExport: values, namedExports: { ...values } }));
     register(new URL('./native-guard.mjs', import.meta.url), {
       data: { root: pathToFileURL(fs.realpathSync(path.dirname(srcRoot)) + path.sep).href,
-        allowed: [...Object.keys(modules), 'node:path', 'node:url', 'node:util'], port: port2 },
+        allowed: [...Object.keys(modules), 'node:path', 'node:url', 'node:util', 'node:events'], port: port2 },
       transferList: [port2],
     });
     for (const [key, value] of Object.entries(globals)) {

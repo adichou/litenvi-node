@@ -1,5 +1,6 @@
 // buildMockEnvironment 通用面用例：Storage 双通道（localStorage / sessionStorage）注入与只读
-// 观测、时钟冻结、跨环境隔离、未声明调用记账（deny）与环境收口、fs 只读视图联通。
+// 观测、时钟冻结、跨环境隔离、未声明调用记账（deny）与环境收口、fs 只读视图联通、
+// node:process 模块导入与全局同一替身。
 // 项目无关——只测环境自身能力。
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -9,16 +10,18 @@ import { runCases } from './run-cases.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const clientFile = path.join(here, 'fixtures', 'storage-client.mjs');
+const processClientFile = path.join(here, 'fixtures', 'process-client.mjs');
 const entryFile = path.join(here, 'fixtures', 'entry.mjs');
 
-// sideEntries 装配：storage-client 在 VM 内直连全局 localStorage，供注入与观测面用例调用。
+// sideEntries 装配：storage-client 在 VM 内直连全局 localStorage，供注入与观测面用例调用；
+// process-client 经 node:process 模块导入验证进程替身注入。
 // 主入口与 sideEntries 不得为同一文件（VM 模块只可 link 一次）。
 function boot({ now } = {}) {
   return buildMockEnvironment({
     srcRoot: entryFile,
     projectRoot: '/mock/project',
     now,
-    sideEntries: [{ key: 'client', file: clientFile }],
+    sideEntries: [{ key: 'client', file: clientFile }, { key: 'processClient', file: processClientFile }],
     initialData: (filesystem) => {
       filesystem.mkdirSync('/mock/project/notes', { recursive: true });
       filesystem.writeFileSync('/mock/project/notes/readme.txt', 'hello litenvi');
@@ -96,6 +99,20 @@ t('时钟冻结：VM 内 Date 固定为注入的 now；fs 只读视图读回装�
     await environment.dispose();
   }
   console.log('✓ 时钟冻结与 fs 视图：Date 固定、装配期文件可读');
+});
+
+t('node:process 模块注入：默认与具名导出同源替身，cwd/env/pid 来自隔离环境', async () => {
+  const environment = await boot();
+  try {
+    assert.equal(environment.exports.processClient.cwd(), '/mock/project', '模块导入的 cwd 应返回 projectRoot');
+    assert.equal(environment.exports.processClient.namedCwd(), '/mock/project', '具名导出 cwd 同样来自替身');
+    assert.equal(environment.exports.processClient.sameAsGlobal(), true, '模块导入应与全局 process 为同一替身');
+    assert.equal(environment.exports.processClient.envHome(), '/mock/home', 'env 应来自隔离环境（HOME 缺省落点）');
+    assert.equal(environment.exports.processClient.pid(), 4242, 'pid 应为替身固定值而非宿主进程');
+  } finally {
+    await environment.dispose();
+  }
+  console.log('✓ node:process 模块注入：cwd 返回 projectRoot、与全局同源');
 });
 
 t('未声明调用记账与环境收口：deny 进 unexpected，dispose 自动拒绝通过', async () => {

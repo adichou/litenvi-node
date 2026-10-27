@@ -36,7 +36,21 @@ remove();
 
 `http.requests` 保留 method/path/query/body、客户端来源、是否已派发，以及 `serverResponse` 和实际交付的 `response`；响应后故障不会抹去真实服务器的执行证据。fetch 支持标准响应头读取/迭代及 AbortSignal；释放环境会取消悬挂请求、关闭服务并清理计时器。
 
+世界内的回调式 `http.request`/`http.get`（如 CLI 对守护进程的探活）只放行 loopback 同端口：经内存传输路由真实路由、故障注入同口径生效（可注入 500 等错误状态模拟心跳接口不可达）、流水账记 `source: client`；端口不符或未监听按 `ECONNREFUSED` 拒连（探活冷启动语义），非 loopback 地址仍按未声明调用记账。
+
 文件写入故障通过 `failWrite(path)` 或 `setFileWriteError()` 注入，不修改业务方法。
+
+## lite-http 门面
+
+`litenvi-node/lite-http.mjs` 是 node:http 客户端的可切换门面，供业务代码统一 import：默认（未设置内存实现）原样转发真实 `node:http`，生产行为不变。`mock()` 设置内存 http 实现（幂等，复用当前实例）、`unmock()` 移除并回到真实实现（规则随实例丢弃）。错误注入是内存实现上的能力：`inject({ method?, path?, status: 400..599, error?/body? })` 增加规则并返回移除函数——命中收到注入的错误响应（如 500 模拟心跳接口不可达），未命中按 `ECONNREFUSED` 拒连（接口无法访问）。回调式 `request/get` 与真实 ClientRequest 消费面兼容（statusCode / data / end / error 事件）；状态为模块级单例，同进程内经同一 specifier 导入（含动态 `import()`）共享同一实例。
+
+## lite-process 门面
+
+`litenvi-node/lite-process.mjs` 与 lite-http 同机制，面向 `node:child_process` 的 `spawn`：默认原样转发真实 spawn；`mock()` 设置内存实现（不真实起进程）、`unmock()` 移除。内存实现把调用入账（`spawns()` 断言 command/args/options），返回替身子进程（pid/stdout/stderr/unref/kill，事件消费面对齐真实 ChildProcess，kill 触发 exit/close）；`onSpawn(handler)` 脚本化每次返回的子进程事件（延迟到微任务触发，与真实事件异步到达一致）。
+
+## lite-fs 门面
+
+`litenvi-node/lite-fs.mjs` 与 lite-http/lite-process 同机制，面向 `node:fs`，但**按作用域收窄——只接管系统运行数据**：`mock({ roots })` 声明运行数据根（看板数据目录/注册表/日志，文件或目录均可，必填）；根内操作走内存卷（同步面 existsSync/readFileSync/writeFileSync/mkdirSync/readdirSync/statSync/lstatSync/realpathSync/rmSync/unlinkSync/rmdirSync/renameSync/copyFileSync/cpSync/appendFileSync/accessSync/openSync/closeSync/createReadStream/chmodSync/symlinkSync，按真实 fs 错误语义抛 ENOENT/EEXIST/EISDIR/ENOTDIR/ENOTEMPTY/EBADF）；**根外一律原样走真实 fs**——模块源码、静态资源、代码 mtime 等系统本体文件不依赖 lite-fs（Node 模块加载器本身也不经门面）。默认（未 mock）全量转发真实 fs。`inject({ op?, path?, code })` 对根内命中操作抛指定 code 的 fs 错误（如 EACCES 模拟写入失败），返回移除函数；根内触到未实现面明确报错，不静默落真实磁盘；无路径参数的操作（fd 类）落在内存卷；多路径操作任一端在根内即按内存卷处理。
 
 ## 验证
 
@@ -105,7 +119,7 @@ try {
 } finally { await fixture.dispose(); }
 ```
 
-每个环境启动一个业务子进程，由库内部添加 `--experimental-test-module-mocks`。整个业务依赖图使用普通 ESM 加载；`mock.module()` 替换 fs（包括 fs/promises）、child_process、HTTP 等边界，复用现有 memfs、Git 和 FakeTimers。业务进程的全局 Date、timer、process 和 fetch 指向隔离环境；Playwright 与测试父进程保留真实时间。父进程不需要 `--experimental-vm-modules`，也不依赖 `registerHooks`。
+每个环境启动一个业务子进程，由库内部添加 `--experimental-test-module-mocks`。整个业务依赖图使用普通 ESM 加载；`mock.module()` 替换 fs（包括 fs/promises）、process、child_process、HTTP 等边界，复用现有 memfs、Git 和 FakeTimers。业务进程的全局 Date、timer、process 和 fetch 指向隔离环境；`import ... from 'node:process'` 与全局 process 拿到同一替身（cwd 返回 projectRoot，VM 后端同口径）；Playwright 与测试父进程保留真实时间。父进程不需要 `--experimental-vm-modules`，也不依赖 `registerHooks`。
 
 输入支持 `srcRoot/projectRoot/env/now/initialStorage/initialData`，`timeoutMs` 是真实时间下的 IPC 预算（默认 10 秒）。返回 `runtime: 'process'`、真实子进程 `pid`、`http.request/requests/pendingCount/injectFault`、只读 `fs`、`git.log()`、`logs/unexpected`、`clock.now/countTimers/tickAsync()`、`refresh()` 和 `dispose()`。请求、推进、刷新和故障注入均需 await。
 
