@@ -1,13 +1,14 @@
-// lite-fs 门面用例：默认全量转发真实 node:fs；mock({ roots }) 只把声明根内的运行数据操作切到
-// 内存卷（真实 fs 错误语义），根外（模块源码等系统本体）一律走真实 fs；inject 注入 fs 错误；
-// unmock 回真实实现。
+// lite-fs 门面用例：默认全量转发真实 node:fs；mock({ exclude }) 黑名单制——排除目录（模块
+// 源码等系统本体）走真实 fs，其余全部落内存卷（真实 fs 错误语义，越界写不可能穿透真实
+// 磁盘）；inject 注入 fs 错误；unmock 回真实实现。
 import assert from 'node:assert/strict';
 import realFs from 'node:fs';
 import liteFs from '../lite-fs.mjs';
 import { runCases } from './run-cases.mjs';
 
 const selfFile = new URL(import.meta.url).pathname; // 系统本体文件（真实磁盘）
-const ROOT = '/data/lite-fs-root'; // 运行数据根（真实磁盘不存在的绝对路径）
+const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/')); // 排除目录：本测试目录（真实磁盘）
+const ROOT = '/data/lite-fs-root'; // 内存卷路径（真实磁盘不存在的绝对路径）
 
 await runCases([
     /** 场景：默认真实实现；输入：未 mock 时读系统本体文件；预期：与 node:fs 完全一致。 */
@@ -15,13 +16,14 @@ await runCases([
         assert.equal(liteFs.existsSync(selfFile), true, '真实文件应可见');
         assert.equal(liteFs.readFileSync(selfFile, 'utf8'), realFs.readFileSync(selfFile, 'utf8'), '内容应与真实 fs 一致');
     },
-    /** 场景：roots 必填；输入：mock() 不带 roots；预期：拒绝（系统本体不得误入内存卷）。 */
-    async function mockRequiresRoots() {
-        assert.throws(() => liteFs.mock(), /roots/, '无声明根应拒绝 mock');
+    /** 场景：exclude 必填；输入：mock() 不带 exclude（含仅传已废弃的 roots）；预期：拒绝。 */
+    async function mockRequiresExclude() {
+        assert.throws(() => liteFs.mock(), /exclude/, '无排除目录应拒绝 mock');
+        assert.throws(() => liteFs.mock({ roots: [ROOT] }), /exclude/, '白名单口径已废弃应拒绝并提示 exclude');
     },
     /** 场景：根内内存卷基本面；输入：mkdir/write/read/append/readdir/stat；预期：内存读写自洽。 */
     async function memoryVolumeBasics() {
-        liteFs.mock({ roots: [ROOT] });
+        liteFs.mock({ exclude: [EXCLUDED] });
         try {
             liteFs.mkdirSync(`${ROOT}/a/b`, { recursive: true });
             liteFs.writeFileSync(`${ROOT}/a/b/x.txt`, 'hello');
@@ -40,7 +42,7 @@ await runCases([
     },
     /** 场景：真实错误语义；输入：缺失路径/缺父目录/重复建目录/对文件 readdir/非空 rm；预期：ENOENT/EEXIST/ENOTDIR/ENOTEMPTY/EISDIR。 */
     async function realErrorCodeSemantics() {
-        liteFs.mock({ roots: [ROOT] });
+        liteFs.mock({ exclude: [EXCLUDED] });
         try {
             liteFs.mkdirSync(`${ROOT}/d`, { recursive: true });
             liteFs.writeFileSync(`${ROOT}/d/f`, 'x');
@@ -55,13 +57,13 @@ await runCases([
             liteFs.unmock();
         }
     },
-    /** 场景：根外系统本体；输入：mock 后读源码文件；预期：原样走真实 fs，不经内存卷。 */
-    async function outsideRootsStaysReal() {
-        liteFs.mock({ roots: [ROOT] });
+    /** 场景：排除目录系统本体；输入：mock 后读源码文件；预期：原样走真实 fs，不经内存卷。 */
+    async function excludedStaysReal() {
+        liteFs.mock({ exclude: [EXCLUDED] });
         try {
-            assert.equal(liteFs.existsSync(selfFile), true, '根外真实文件应仍可见');
-            assert.equal(liteFs.readFileSync(selfFile, 'utf8'), realFs.readFileSync(selfFile, 'utf8'), '根外读取应与真实 fs 一致');
-            assert.equal(liteFs.existsSync(`${ROOT}/x`), false, '根内路径应走内存卷（真实磁盘本无此文件）');
+            assert.equal(liteFs.existsSync(selfFile), true, '排除目录内真实文件应仍可见');
+            assert.equal(liteFs.readFileSync(selfFile, 'utf8'), realFs.readFileSync(selfFile, 'utf8'), '排除目录读取应与真实 fs 一致');
+            assert.equal(liteFs.existsSync(`${ROOT}/x`), false, '排除外路径应走内存卷（真实磁盘本无此文件）');
         }
         finally {
             liteFs.unmock();
@@ -69,7 +71,7 @@ await runCases([
     },
     /** 场景：移动/复制/递归删除；输入：rename/copyFile/cp -r/rm -r；预期：树操作自洽。 */
     async function treeOperations() {
-        liteFs.mock({ roots: [ROOT] });
+        liteFs.mock({ exclude: [EXCLUDED] });
         try {
             liteFs.mkdirSync(`${ROOT}/t/sub`, { recursive: true });
             liteFs.writeFileSync(`${ROOT}/t/sub/a`, '1');
@@ -88,7 +90,7 @@ await runCases([
     },
     /** 场景：fd 面；输入：openSync('a')/closeSync；预期：fd 数字、内容可读、坏 fd EBADF。 */
     async function fdSurface() {
-        liteFs.mock({ roots: [ROOT] });
+        liteFs.mock({ exclude: [EXCLUDED] });
         try {
             liteFs.mkdirSync(ROOT, { recursive: true });
             const fd = liteFs.openSync(`${ROOT}/log.txt`, 'a');
@@ -104,7 +106,7 @@ await runCases([
     },
     /** 场景：错误注入；输入：对写入路径注入 EACCES；预期：写入抛错、读取不受影响、撤销恢复。 */
     async function injectedFaultScopesToOp() {
-        liteFs.mock({ roots: [ROOT] });
+        liteFs.mock({ exclude: [EXCLUDED] });
         try {
             liteFs.mkdirSync(ROOT, { recursive: true });
             liteFs.writeFileSync(`${ROOT}/f`, 'seed');
@@ -121,9 +123,9 @@ await runCases([
     },
     /** 场景：根内未实现面与前置约束；输入：未实现函数在根内调用、未 mock 即 inject；预期：明确报错。 */
     async function unsupportedSurfaceIsLoud() {
-        liteFs.mock({ roots: [ROOT] });
+        liteFs.mock({ exclude: [EXCLUDED] });
         try {
-            assert.throws(() => liteFs.truncateSync(`${ROOT}/f`), /未覆盖/, '根内未实现操作应明确报错而非落真实磁盘');
+            assert.throws(() => liteFs.truncateSync(`${ROOT}/f`), /未覆盖/, '卷内未实现操作应明确报错而非落真实磁盘');
         }
         finally {
             liteFs.unmock();
@@ -132,10 +134,10 @@ await runCases([
     },
     /** 场景：幂等与恢复；输入：重复 mock 保留卷、unmock 后根内路径按真实 fs 语义；预期：状态随实例。 */
     async function mockIdempotentAndUnmockDropsVolume() {
-        liteFs.mock({ roots: [ROOT] });
+        liteFs.mock({ exclude: [EXCLUDED] });
         liteFs.mkdirSync(ROOT, { recursive: true });
         liteFs.writeFileSync(`${ROOT}/keep`, 'x');
-        liteFs.mock({ roots: [ROOT] });
+        liteFs.mock({ exclude: [EXCLUDED] });
         assert.equal(liteFs.readFileSync(`${ROOT}/keep`, 'utf8'), 'x', '重复 mock 不应丢弃内存卷');
         liteFs.unmock();
         assert.equal(liteFs.existsSync(`${ROOT}/keep`), false, 'unmock 后应回到真实 fs（该路径真实磁盘不存在）');

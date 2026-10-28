@@ -1,20 +1,18 @@
-// lite-fs：node:fs 的可切换门面，机制与 lite-http / lite-process 一致——但按作用域收窄：
-// 只接管「系统运行数据」。mock({ roots }) 声明运行数据根（看板数据目录 / 注册表 / 日志等，
-// 文件或目录均可）；根内操作走内存卷（真 fs 错误语义：ENOENT/EEXIST/EISDIR/ENOTDIR/
-// ENOTEMPTY/EBADF），根外一律原样走真实 fs——模块源码、静态资源、代码 mtime 等系统本体
-// 文件不依赖 lite-fs（加载器本身也不经本门面）。默认（未 mock）全量转发真实 node:fs，
-// 生产行为不变。错误注入是内存实现上的能力：inject({ op?, path?, code }) 对根内命中操作抛
-// 指定 code 的 fs 错误（如 EACCES 模拟写入失败），返回移除函数；op 省略匹配全部操作，
-// path 精确匹配。多路径操作（rename/copy/symlink）按首个路径参数判定作用域。根内触到
-// 未实现的 fs 面会明确报错（不静默落真实磁盘）；根外未实现面直接透传真实 fs。
-// unmock() 移除内存实现（卷与规则随实例丢弃）。状态为模块级单例：同进程内经同一
-// specifier 导入共享同一实例。
+// lite-fs：node:fs 的可切换门面，机制与 lite-http / lite-spawn 一致——但按作用域收窄：
+// 只接管「系统运行数据」。作用域为黑名单制：mock({ exclude }) 声明排除目录（模块源码、
+// 静态资源、代码 mtime 探测等系统本体所在），排除目录外**全部**落内存卷——测试世界的越界
+// 写不可能穿透真实磁盘（白名单口径曾让未声明路径静默走真实 fs，已废弃）。内存卷带真 fs
+// 错误语义（ENOENT/EEXIST/EISDIR/ENOTDIR/ENOTEMPTY/EBADF）。默认（未 mock）全量转发真实
+// node:fs，生产行为不变。错误注入是内存实现上的能力：inject({ op?, path?, code }) 对卷内
+// 命中操作抛指定 code 的 fs 错误（如 EACCES 模拟写入失败），返回移除函数；op 省略匹配全部
+// 操作，path 精确匹配。多路径操作（rename/copy/symlink）按首个路径参数判定作用域；卷内触
+// 到未实现的 fs 面会明确报错（不静默落真实磁盘）。unmock() 移除内存实现（卷与规则随实例
+// 丢弃）。状态为模块级单例：同进程内经同一 specifier 导入共享同一实例。
 import fs from 'node:fs';
 import path from 'node:path';
 
-function createMemoryFs(roots) {
+function createMemoryFs() {
     const faults = [];
-    const normalized = roots.map(root => path.resolve(String(root)));
     const matches = (fault, op, target) => (!fault.op || fault.op === op) && (!fault.path || fault.path === target);
     const fail = (code, syscall, target) => {
         const error = new Error(`${code}: ${syscall} 失败（lite-fs 内存卷）：${target}`);
@@ -235,6 +233,11 @@ function createMemoryFs(roots) {
                 fail('EBADF', 'close', String(fd));
         },
         fdInUse(fd) { return fds.has(fd); },
+        // realpath：内存卷无符号链接，等价 resolve（git-flow 定位仓库根等调用路径）
+        realpathSync(target) {
+            guard('realpathSync', target);
+            return path.resolve(String(target));
+        },
         // 最小读流（零依赖）：on/pipe 消费面，整体缓冲一跳推 data、再推 end——不背压不切片；
         // 不引 node:events，保持 lite-fs 仅依赖 node:fs/node:path（可进模块白名单受控环境）。
         createReadStream(target) {
@@ -290,15 +293,19 @@ function createMemoryFs(roots) {
     }
     let fdSeq = 100;
     const fds = new Map();
-    return { impl, roots: normalized };
+    return { impl };
 }
 
-let memory = null; // 未设置 → 默认实现（真实 node:fs 全量转发）
+let memory = null; // 未设置 → 默认实现（真实 node:fs 全量转发）；{ impl, list }
 
-const mock = ({ roots } = {}) => {
-    if (!Array.isArray(roots) || !roots.length)
-        throw new Error('lite-fs.mock 需要非空 roots：声明运行数据根（系统本体文件留在真实 fs）');
-    return memory ?? (memory = createMemoryFs(roots));
+const mock = ({ exclude } = {}) => {
+    if (memory)
+        return memory;
+    if (!Array.isArray(exclude) || !exclude.length)
+        throw new Error('lite-fs.mock 需要非空 exclude：声明排除目录（系统本体留在真实 fs），其余全落内存卷');
+    memory = createMemoryFs();
+    memory.list = exclude.map(entry => path.resolve(String(entry)));
+    return memory;
 };
 const unmock = () => { memory = null; };
 const inject = (fault) => {
@@ -306,12 +313,13 @@ const inject = (fault) => {
         throw new Error('lite-fs.inject 需先 mock() 设置内存实现');
     return memory.impl.inject(fault);
 };
-// 作用域判定：目标在任一声明根内（根本身或其子路径）才走内存卷
+// 作用域判定：目标不在任何排除目录内（排除目录本身或其子路径除外）即走内存卷——
+// 越界写不可能穿透真实磁盘
 const scoped = (target) => {
     if (typeof target !== 'string')
         return false;
     const resolved = path.resolve(target);
-    return memory.roots.some(root => resolved === root || resolved.startsWith(root + path.sep));
+    return !memory.list.some(entry => resolved === entry || resolved.startsWith(entry + path.sep));
 };
 
 const facade = new Proxy({}, {
@@ -344,11 +352,12 @@ const facade = new Proxy({}, {
                 }
                 return realFn ? realFn(...args) : fs[prop](...args);
             }
-            const paths = args.filter(arg => typeof arg === 'string');
-            // 作用域判定：任一路径参数在声明根内 → 内存卷；无路径参数的操作（fd 类）落在内存卷
-            // 的 fd 表；多路径跨界操作（rename/copy/symlink）按内存卷处理，源需已在卷内。
-            const anyInScope = paths.some(scoped);
-            if (anyInScope || (paths.length === 0 && memoryFn)) {
+            // 作用域判定按首个路径参数：readFileSync 的 encoding、flags 等字符串载荷不是路径，
+            // 混入判定会让排除目录内的文件被误路由进内存卷（黑名单模式下 'utf8' 恒视为卷内
+            // 路径）；多路径操作（rename/copy/cp）同样按首个路径定作用域，跨界操作源需已在卷内。
+            // 无路径参数的操作（fd 类已在上文分流）有内存实现则落内存卷。
+            const pathArg = typeof args[0] === 'string' ? args[0] : null;
+            if ((pathArg !== null && scoped(pathArg)) || (pathArg === null && memoryFn)) {
                 if (!memoryFn)
                     throw new Error(`lite-fs 内存实现未覆盖根内操作 fs.${String(prop)}——补充实现，或确认该路径属于运行数据`);
                 return memoryFn(...args);
