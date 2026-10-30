@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const files = ['browser-storage.test.mjs', 'environment.test.mjs', 'environment-assembly.test.mjs', 'files.test.mjs', 'http-faults.test.mjs', 'lite-browser.test.mjs', 'lite-http.test.mjs', 'lite-fs.test.mjs', 'lite-spawn.test.mjs', 'lite-server.test.mjs', 'network-guard.test.mjs', 'playwright.test.mjs', 'process-child.test.mjs', 'toolchain-matrix.test.mjs', 'process-environment.test.mjs', 'process-protocol.test.mjs', 'process-worker.test.mjs', 'process-worker-send.test.mjs'];
+const files = ['browser-storage.test.mjs', 'environment.test.mjs', 'environment-assembly.test.mjs', 'files.test.mjs', 'http-faults.test.mjs', 'lite-browser.test.mjs', 'lite-http.test.mjs', 'lite-fs.test.mjs', 'lite-child_process.test.mjs', 'lite-cmd-mgr.test.mjs', 'lite-cmd-git.test.mjs', 'lite-cmd-node.test.mjs', 'lite-cmd-os.test.mjs', 'lite-process.test.mjs', 'lite-server.test.mjs', 'network-guard.test.mjs', 'playwright.test.mjs', 'process-child.test.mjs', 'toolchain-matrix.test.mjs', 'process-environment.test.mjs', 'process-protocol.test.mjs', 'process-worker.test.mjs', 'process-worker-send.test.mjs'];
 
 let failed = 0;
 for (const file of files) {

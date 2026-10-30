@@ -1,4 +1,4 @@
-// lite-fs：node:fs 的可切换门面，机制与 lite-http / lite-spawn 一致——但按作用域收窄：
+// lite-fs：node:fs 的可切换门面，机制与 lite-http / lite-child_process 一致——但按作用域收窄：
 // 只接管「系统运行数据」。作用域为黑名单制：mock({ exclude }) 声明排除目录（模块源码、
 // 静态资源、代码 mtime 探测等系统本体所在），排除目录外**全部**落内存卷——测试世界的越界
 // 写不可能穿透真实磁盘（白名单口径曾让未声明路径静默走真实 fs，已废弃）。内存卷带真 fs
@@ -7,9 +7,20 @@
 // 命中操作抛指定 code 的 fs 错误（如 EACCES 模拟写入失败），返回移除函数；op 省略匹配全部
 // 操作，path 精确匹配。多路径操作（rename/copy/symlink）按首个路径参数判定作用域；卷内触
 // 到未实现的 fs 面会明确报错（不静默落真实磁盘）。unmock() 移除内存实现（卷与规则随实例
-// 丢弃）。状态为模块级单例：同进程内经同一 specifier 导入共享同一实例。
+// 丢弃；markPersistent 登记的持久根子树除外——unmock 时快照、下次 mock 建卷后恢复，跨卷
+// 复位存活，其余内容清零由世界自播种）。持久根是通用机制：lite-fs 不认识任何具体根（命令
+// 系统卷 /mock-cmd 由 lite-cmd-mgr 登记）。状态为模块级单例：同进程内经同一 specifier 导入
+// 共享同一实例。
 import fs from 'node:fs';
 import path from 'node:path';
+
+// 目录树节点深拷贝：快照与恢复两侧隔离（卷内后续变更不污染快照、恢复不与快照共享引用）
+function cloneNode(node) {
+    return {
+        dirs: new Map([...node.dirs].map(([name, child]) => [name, cloneNode(child)])),
+        files: new Map([...node.files].map(([name, file]) => [name, { ...file, data: Buffer.from(file.data) }])),
+    };
+}
 
 function createMemoryFs() {
     const faults = [];
@@ -60,7 +71,7 @@ function createMemoryFs() {
         mkdirSync(target, options = {}) {
             guard('mkdirSync', target);
             const names = split(target);
-            let node = root;
+            let node = root, created;
             for (let i = 0; i < names.length; i++) {
                 const name = names[i];
                 if (node.files.has(name)) {
@@ -74,11 +85,13 @@ function createMemoryFs() {
                         fail('ENOENT', 'mkdir', target);
                     next = { dirs: new Map(), files: new Map() };
                     node.dirs.set(name, next);
+                    created ??= path.sep + names.slice(0, i + 1).join(path.sep);
                 }
                 else if (i === names.length - 1 && !options.recursive)
                     fail('EEXIST', 'mkdir', target);
                 node = next;
             }
+            return options.recursive ? created : undefined;
         },
         writeFileSync(target, data) {
             if (Number.isInteger(target)) {
@@ -108,10 +121,11 @@ function createMemoryFs() {
         readFileSync(target, encoding) {
             guard('readFileSync', target);
             const hit = entryOf(target);
-            if (!hit || !hit.parent.files.has(hit.name))
-                fail(dirOf(target) !== undefined ? 'EISDIR' : 'ENOENT', 'open', target);
+            if (dirOf(target) !== undefined) fail('EISDIR', 'read', undefined);
+            if (!hit || !hit.parent.files.has(hit.name)) fail('ENOENT', 'open', target);
             const file = hit.parent.files.get(hit.name);
-            return encoding ? file.data.toString(encoding) : Buffer.from(file.data);
+            const format = typeof encoding === 'object' ? encoding?.encoding : encoding;
+            return format ? file.data.toString(format) : Buffer.from(file.data);
         },
         readdirSync(target) {
             guard('readdirSync', target);
@@ -133,11 +147,7 @@ function createMemoryFs() {
                     fail('ENOENT', 'rm', target);
                 return;
             }
-            if (hit.parent.dirs.has(hit.name) && !options.recursive) {
-                const node = hit.parent.dirs.get(hit.name);
-                if (node.dirs.size || node.files.size)
-                    fail('ENOTEMPTY', 'rm', target);
-            }
+            if (hit.parent.dirs.has(hit.name) && !options.recursive) fail('ERR_FS_EISDIR', 'rm', target);
             hit.parent.dirs.delete(hit.name);
             hit.parent.files.delete(hit.name);
         },
@@ -203,7 +213,7 @@ function createMemoryFs() {
             guard('realpathSync', target);
             const resolved = path.resolve(String(target));
             if (!impl.existsSync(resolved))
-                fail('ENOENT', 'realpath', target);
+                fail('ENOENT', 'lstat', target);
             return resolved;
         },
         chmodSync() { /* 内存卷无权限语义：记账为 no-op */ },
@@ -224,6 +234,7 @@ function createMemoryFs() {
                 hit.parent.files.set(hit.name, { data: Buffer.alloc(0), mtimeMs: Date.now() });
             if (!hit.parent.files.has(hit.name))
                 fail(hit.parent.dirs.has(hit.name) ? 'EISDIR' : 'ENOENT', 'open', target);
+            if (flags.includes('w')) hit.parent.files.set(hit.name, { data: Buffer.alloc(0), mtimeMs: Date.now() });
             const fd = ++fdSeq;
             fds.set(fd, { file: String(target), flags: String(flags || 'r') }); // 记录 flags：fd 写入按 open 语义落点
             return fd;
@@ -233,11 +244,6 @@ function createMemoryFs() {
                 fail('EBADF', 'close', String(fd));
         },
         fdInUse(fd) { return fds.has(fd); },
-        // realpath：内存卷无符号链接，等价 resolve（git-flow 定位仓库根等调用路径）
-        realpathSync(target) {
-            guard('realpathSync', target);
-            return path.resolve(String(target));
-        },
         // 最小读流（零依赖）：on/pipe 消费面，整体缓冲一跳推 data、再推 end——不背压不切片；
         // 不引 node:events，保持 lite-fs 仅依赖 node:fs/node:path（可进模块白名单受控环境）。
         createReadStream(target) {
@@ -293,10 +299,39 @@ function createMemoryFs() {
     }
     let fdSeq = 100;
     const fds = new Map();
-    return { impl };
+    return {
+        impl,
+        // 持久根支撑：子树快照（卷销毁前留存；不存在为 null）与植入（新卷恢复；父链按需补建）
+        snapshotOf(target) {
+            const node = dirOf(target);
+            return node ? cloneNode(node) : null;
+        },
+        plant(target, node) {
+            const names = split(target);
+            const name = names.pop();
+            let cursor = root;
+            for (const seg of names) {
+                let next = cursor.dirs.get(seg);
+                if (!next) {
+                    next = { dirs: new Map(), files: new Map() };
+                    cursor.dirs.set(seg, next);
+                }
+                cursor = next;
+            }
+            cursor.dirs.set(name, cloneNode(node));
+        },
+    };
 }
 
 let memory = null; // 未设置 → 默认实现（真实 node:fs 全量转发）；{ impl, list }
+
+// 持久根：跨卷复位存活的子树登记（模块级，与卷实例无关）——unmock 时把卷内各持久根子树
+// 快照存模块级存储，mock 建新卷后恢复；可在任何时刻登记（未 mock 时只是登记，无副作用）
+const persistentRoots = new Set();
+const persistentSnapshots = new Map(); // root → 快照节点（null = 上次卷内不存在该根）
+const markPersistent = (root) => {
+    persistentRoots.add(path.resolve(String(root)));
+};
 
 const mock = ({ exclude } = {}) => {
     if (memory)
@@ -305,9 +340,18 @@ const mock = ({ exclude } = {}) => {
         throw new Error('lite-fs.mock 需要非空 exclude：声明排除目录（系统本体留在真实 fs），其余全落内存卷');
     memory = createMemoryFs();
     memory.list = exclude.map(entry => path.resolve(String(entry)));
+    for (const [rootPath, snapshot] of persistentSnapshots) {
+        if (snapshot) memory.plant(rootPath, snapshot); // 持久根恢复：其余内容清零由世界自播种
+    }
     return memory;
 };
-const unmock = () => { memory = null; };
+const unmock = () => {
+    if (memory) {
+        for (const rootPath of persistentRoots)
+            persistentSnapshots.set(rootPath, memory.snapshotOf(rootPath));
+    }
+    memory = null;
+};
 const inject = (fault) => {
     if (!memory)
         throw new Error('lite-fs.inject 需先 mock() 设置内存实现');
@@ -332,6 +376,10 @@ const facade = new Proxy({}, {
             return unmock;
         if (prop === 'inject')
             return inject;
+        if (prop === 'isMocked') // 状态自省：其他 lite 门面（如世界装配层判定骨架写入不落真实磁盘的前置条件）
+            return () => memory !== null;
+        if (prop === 'markPersistent') // 持久根登记：跨卷复位存活的通用机制（lite-fs 不认识具体根）
+            return markPersistent;
         if (!memory)
             return fs[prop];
         if (prop === 'constants')

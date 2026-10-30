@@ -8,6 +8,8 @@
 // 级单例：同进程内经同一 specifier 导入（含动态 import）共享。
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { urlToHttpOptions } from 'node:url';
 import liteServer from './lite-server.mjs';
 
 // 内存 http 实现：回调式 request/get 按传输层注入规则应答错误、经 lite-server 路由真实
@@ -20,8 +22,10 @@ function createMemoryHttp() {
     && (!fault.path || (fault.path instanceof RegExp ? fault.path.test(path) : fault.path === path))
     && (!fault.query || Object.entries(fault.query).every(([key, value]) => new URLSearchParams(search).get(key) === String(value)));
 
-    function request(options, callback) {
-        const config = typeof options === 'string' || options instanceof URL ? new URL(options) : (options || {});
+    function request(options, extra, callback) {
+        if (typeof extra === 'function') { callback = extra; extra = undefined; }
+        const config = typeof options === 'string' || options instanceof URL
+            ? { ...urlToHttpOptions(new URL(options)), ...extra } : (options || {});
         const method = String(config.method || 'GET').toUpperCase();
         const raw = String((config instanceof URL ? config.pathname + config.search : config.path) || '/');
         const at = raw.indexOf('?');
@@ -30,15 +34,25 @@ function createMemoryHttp() {
         const port = Number(config.port) || 80;
         const req = new EventEmitter();
         const chunks = [];
-        let ended = false, aborted = false;
-        req.write = (chunk) => { chunks.push(String(chunk)); return req; };
-        req.end = (body) => {
-            if (body !== undefined && body !== null)
-                chunks.push(String(body));
-            if (ended)
-                return req;
-            ended = true;
-            const payload = chunks.join('');
+        let ended = false, aborted = false, closed = false;
+        req.destroyed = false;
+        req.writableEnded = false;
+        if (callback) req.once('response', callback);
+        const close = () => { if (!closed) { closed = true; req.destroyed = true; req.emit('close'); } };
+        const bytes = (chunk, encoding) => Buffer.isBuffer(chunk) || chunk instanceof Uint8Array ? Buffer.from(chunk) : Buffer.from(chunk, encoding);
+        req.write = (chunk, encoding, done) => {
+            chunks.push(bytes(chunk, typeof encoding === 'string' ? encoding : undefined));
+            const callback = typeof encoding === 'function' ? encoding : done;
+            if (callback) queueMicrotask(callback);
+            return true;
+        };
+        req.end = (body, encoding, done) => {
+            if (ended) return req;
+            if (typeof body === 'function') { done = body; body = undefined; }
+            if (body !== undefined && body !== null) chunks.push(bytes(body, typeof encoding === 'string' ? encoding : undefined));
+            ended = req.writableEnded = true;
+            queueMicrotask(() => { req.emit('finish'); (typeof encoding === 'function' ? encoding : done)?.(); });
+            const payload = Buffer.concat(chunks);
             // 故障匹配面：method + path（字符串精确 / 正则）+ query（键值逐项比对搜索串）。
             // once：命中即自毁（跨用例不泄漏；wait 闸门期间到达的后续请求不再被拦）。
             const matched = faults.filter(rule => matches(rule, method, target, search));
@@ -64,9 +78,10 @@ function createMemoryHttp() {
                 }
                 if (aborted)
                     return;
-                const response = await liteServer.handle(port, { method, raw, payload, isAborted: () => aborted });
+                const response = await liteServer.handle(port, { method, raw, payload, headers: config.headers, isAborted: () => aborted });
                 if (response === null) {
-                    req.emit('error', Object.assign(new Error(`connect ECONNREFUSED 127.0.0.1:${port}`), { code: 'ECONNREFUSED', syscall: 'connect' }));
+                    req.emit('error', Object.assign(new Error(`connect ECONNREFUSED 127.0.0.1:${port}`), { code: 'ECONNREFUSED', syscall: 'connect', address: '127.0.0.1', port }));
+                    close();
                     return;
                 }
                 deliverResponse(response.status, response.headers, response.body, response.faulted);
@@ -75,31 +90,37 @@ function createMemoryHttp() {
                 queueMicrotask(() => {
                     if (aborted)
                         return;
-                    const res = new EventEmitter();
+                    const res = new PassThrough();
                     res.statusCode = status;
-                    res.headers = headers;
+                    res.headers = Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
+                    res.statusMessage = http.STATUS_CODES[status];
+                    res.complete = false;
                     res.faulted = faulted; // 故障回包标记：观测面据此区分真实路由产物与注入回包
-                    callback?.(res);
+                    res.once('end', () => { res.complete = true; queueMicrotask(close); });
                     req.emit('response', res);
                     queueMicrotask(() => {
-                        res.emit('data', Buffer.from(text)); // 对齐真实流：响应 data 按 Buffer 语义
-                        res.emit('end');
+                        res.end(method === 'HEAD' || status === 204 || status === 304 ? undefined : Buffer.from(text));
                     });
                 });
             }
             // wait 闸门串是 async：拒绝（闸门 promise 失败）按请求错误上抛，不静默吞掉
-            queueMicrotask(() => { route().catch(error => req.emit('error', error)); });
+            queueMicrotask(() => { route().catch(error => { if (!aborted) { req.emit('error', error); close(); } }); });
             return req;
         };
-        req.destroy = () => { aborted = true; };
+        req.destroy = error => {
+            if (aborted) return req;
+            aborted = req.destroyed = true;
+            queueMicrotask(() => { if (error) req.emit('error', error); close(); });
+            return req;
+        };
         return req;
     }
 
     return {
         request,
-        get(options, callback) {
-            const req = request(typeof options === 'string' || options instanceof URL ? options : { ...options, method: 'GET' }, callback);
-            req.end(); // 真实 http.get 自动 end，内存实现同口径
+        get(...args) {
+            const req = request(...args);
+            req.end(); // 原生 get 只自动 end，仍保留显式 method。
             return req;
         },
         inject(fault) {
@@ -129,6 +150,9 @@ const liteHttp = {
     mock() { return memory ?? (memory = createMemoryHttp()); },
     // 移除内存实现，回到真实 node:http；注入规则随实例一并丢弃
     unmock() { memory = null; },
+    // 内存实现是否已设置——lite-server socket 前端等回灌方据此防误用（未 mock 的
+    // request 会真实外联，回环请求会自成环路）
+    isMocked() { return memory !== null; },
     // 向内存实现注入错误规则；须先 mock()，返回移除函数
     inject(fault) {
         if (!memory)
