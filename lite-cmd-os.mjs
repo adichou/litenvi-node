@@ -1,3 +1,4 @@
+// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；无前缀的接口允许所有调用方使用。
 // lite-cmd-os：OS 命令集——open/ls/pwd/cwd/kill + 常用文件命令（mkdir/rm/cp/mv/cat/touch/
 // test，桥接 lite-fs）+ shell 内建 cd/exit，导入即向 lite-cmd-mgr 登记（/mock-cmd/ 命名空间：
 // open/kill 在 usr/bin，其余基础命令与内建在 bin）。本模块不再依赖 lite-process：进程面能力
@@ -9,8 +10,8 @@
 //（ctx.cwd()：假世界虚拟 cwd / 真实 process.cwd()）。cd（shell 内建）：沿用 process 替身的
 // chdir 校验（目标须为存在的目录，相对路径按当前 cwd 解析），落点经 ctx.setCwd 回写进程环境
 // 面——假世界外（liteProcess 未 mock）ctx.setCwd 缺席，按失败收场（真实子进程改不了父进程
-// cwd，spawn 形态语义本就不成立）。exit（shell 内建）：沿用 ProcessExitError 语义——同步面
-// 记录退出意图（ctx.recordExit）并上抛 ProcessExitError（退出意图可见可捕获，由调用方决定
+// cwd，spawn 形态语义本就不成立）。exit（shell 内建）：沿用 pkg_ProcessExitError 语义——同步面
+// 记录退出意图（ctx.recordExit）并上抛 pkg_ProcessExitError（退出意图可见可捕获，由调用方决定
 // 收场；liteProcess.exit 转调口径），异步面按子进程以该码退出收场（真实子进程调 exit(n) 即
 // 以 n 退出，不外抛）。
 // kill：向内存子进程发信号（桥接 lite-child_process 的 pid 登记表与 signal 投递原语）；
@@ -18,21 +19,24 @@
 import path from 'node:path';
 import liteFs from './lite-fs.mjs';
 import liteChildProcess from './lite-child_process.mjs';
-import { ProcessExitError } from './lite-cmd-mgr.mjs';
+import { pkg_ProcessExitError } from './lite-cmd-mgr.mjs';
 
-const openImpl = {
-    run(_argv, _ctx, child) { emitCli(child, { status: 0 }); }, // 桌面动作：无输出，正常退出
+const f_openImpl = {
+    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
+    run(_argv, _ctx, child) { f_emitCli(child, { status: 0 }); }, // 桌面动作：无输出，正常退出
+    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
     runSync() { return { status: 0, stdout: '', stderr: '' }; },
 };
-const osCommands = {};
-osCommands['/mock-cmd/usr/bin/open'] = openImpl;
+const f_osCommands = {};
+f_osCommands['/mock-cmd/usr/bin/open'] = f_openImpl;
 
 // ---------- 常用文件命令（桥接 lite-fs：作用域随其 mock 状态——内存卷或真实盘） ----------
 // 参数口径对齐 POSIX 常用形态；错误按真实命令行风格 status 1 + stderr `<cmd>: <path>: <原因>`。
 // 异步面统一微任务延迟回事件（对齐真实子进程时序：进程不可能在 spawn 返回前退出）
 
 // 命令异步面的统一出口：stdout/stderr（可空）+ 退出码
-function emitCli(child, { status, stdout = '', stderr = '' }) {
+// 私有方法：仅在本文件实现中使用，不导出。
+function f_emitCli(child, { status, stdout = '', stderr = '' }) {
     queueMicrotask(() => {
         if (stdout) child.stdout.write(Buffer.from(stdout));
         if (stderr) child.stderr.write(Buffer.from(stderr));
@@ -40,65 +44,76 @@ function emitCli(child, { status, stdout = '', stderr = '' }) {
         child.emit('close', status, null);
     });
 }
-const flagsOf = (argv) => argv.filter(a => String(a).startsWith('-') && a !== '-');
-const operandsOf = (argv) => argv.filter(a => !String(a).startsWith('-'));
+// 私有方法：仅在本文件实现中使用，不导出。
+const f_flagsOf = (argv) => argv.filter(a => String(a).startsWith('-') && a !== '-');
+// 私有方法：仅在本文件实现中使用，不导出。
+const f_operandsOf = (argv) => argv.filter(a => !String(a).startsWith('-'));
 
 // 命令实现统一入口：runSync(argv) → { status, stdout?, stderr? }
-function errorReason(error) {
+// 私有方法：仅在本文件实现中使用，不导出。
+function f_errorReason(error) {
     return { ENOENT: 'No such file or directory', EEXIST: 'File exists', ENOTDIR: 'Not a directory',
         EISDIR: 'Is a directory', EACCES: 'Permission denied', EPERM: 'Operation not permitted',
         ENOTEMPTY: 'Directory not empty' }[error.code] || error.code || '错误';
 }
-function failCli(cmd, target, reason) {
+// 私有方法：仅在本文件实现中使用，不导出。
+function f_failCli(cmd, target, reason) {
     return { status: 1, stderr: `${cmd}: ${target}: ${reason}\n` };
 }
 // 多路径命令遇到单个失败仍处理后续路径，保留全部诊断与最终失败状态。
-function eachOperand(cmd, targets, action) {
+// 私有方法：仅在本文件实现中使用，不导出。
+function f_eachOperand(cmd, targets, action) {
     const result = { status: 0, stderr: '' };
     for (const target of targets) {
         let failure;
         try { failure = action(target); }
-        catch (error) { failure = failCli(cmd, target, errorReason(error)); }
+        catch (error) { failure = f_failCli(cmd, target, f_errorReason(error)); }
         if (failure?.status) { result.status = 1; result.stderr += failure.stderr; }
     }
     return result;
 }
-const fileCommands = {
+const f_fileCommands = {
+    // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
     echo(argv) {
         // POSIX echo：参数按空格拼接 + 换行收尾（-n 抑制尾换行的常用形态支持）
         const noNewline = argv[0] === '-n';
         const text = (noNewline ? argv.slice(1) : argv).join(' ');
         return { status: 0, stdout: noNewline ? text : `${text}\n` };
     },
+    // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
     mkdir(argv, ctx) {
+        // 私有方法：仅在本文件实现中使用，不导出。
         const recursive = argv.some(a => /^-[pm]*p/.test(String(a)));
-        const dirs = operandsOf(argv);
+        const dirs = f_operandsOf(argv);
         if (!dirs.length) return { status: 1, stderr: 'usage: mkdir [-p] directory ...\n' };
-        return eachOperand('mkdir', dirs, dir => {
+        return f_eachOperand('mkdir', dirs, dir => {
             liteFs.mkdirSync(path.resolve(ctx.cwd(), dir), { recursive });
         });
     },
+    // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
     rm(argv, ctx) {
-        const flags = flagsOf(argv).join('');
+        const flags = f_flagsOf(argv).join('');
         const recursive = /r/i.test(flags), force = /f/i.test(flags);
-        const paths = operandsOf(argv);
+        const paths = f_operandsOf(argv);
         if (!paths.length) return force ? { status: 0 } : { status: 1, stderr: 'usage: rm [-rf] file ...\n' };
-        return eachOperand('rm', paths, target => {
+        return f_eachOperand('rm', paths, target => {
             const filename = path.resolve(ctx.cwd(), target);
             // 非递归 rm 不删除目录，包括空目录。
             if (!recursive && liteFs.existsSync(filename) && liteFs.statSync(filename).isDirectory())
-                return failCli('rm', target, 'is a directory');
+                return f_failCli('rm', target, 'is a directory');
             liteFs.rmSync(filename, { recursive, force });
         });
     },
+    // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
     cp(argv, ctx) {
+        // 私有方法：仅在本文件实现中使用，不导出。
         const recursive = argv.some(a => /^-[rR]/.test(String(a)));
-        const [src, dst, ...extra] = operandsOf(argv);
+        const [src, dst, ...extra] = f_operandsOf(argv);
         if (!src || !dst || extra.length) return { status: 1, stderr: 'usage: cp [-r] source target\n' };
         const from = path.resolve(ctx.cwd(), src);
         let source;
         try { source = liteFs.statSync(from); }
-        catch (error) { return failCli('cp', src, errorReason(error)); }
+        catch (error) { return f_failCli('cp', src, f_errorReason(error)); }
         if (source.isDirectory() && !recursive)
             return { status: 1, stderr: `cp: ${src} is a directory (not copied).\n` };
         let target = dst;
@@ -110,21 +125,24 @@ const fileCommands = {
             liteFs.statSync(path.dirname(filename));
             if (recursive) liteFs.cpSync(from, filename, { recursive: true });
             else liteFs.copyFileSync(from, filename);
-        } catch (error) { return failCli('cp', target, errorReason(error)); }
+        } catch (error) { return f_failCli('cp', target, f_errorReason(error)); }
         return { status: 0 };
     },
+    // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
     mv(argv, ctx) {
-        const [src, dst, ...extra] = operandsOf(argv);
+        const [src, dst, ...extra] = f_operandsOf(argv);
         if (!src || !dst || extra.length) return { status: 1, stderr: 'usage: mv source target\n' };
         let target = dst;
         try {
             const to = path.resolve(ctx.cwd(), dst);
             if (liteFs.existsSync(to) && liteFs.statSync(to).isDirectory()) target = path.join(dst, path.basename(src));
             liteFs.renameSync(path.resolve(ctx.cwd(), src), path.resolve(ctx.cwd(), target));
-        } catch (error) { return failCli('mv', `rename ${src} to ${target}`, errorReason(error)); }
+        } catch (error) { return f_failCli('mv', `rename ${src} to ${target}`, f_errorReason(error)); }
         return { status: 0 };
     },
+    // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
     cat(argv, ctx) {
+        // 私有方法：仅在本文件实现中使用，不导出。
         const files = argv.filter(a => a === '-' || !String(a).startsWith('-'));
         if (!files.length) files.push('-');
         const chunks = [];
@@ -137,23 +155,25 @@ const fileCommands = {
                 continue;
             }
             try { chunks.push(liteFs.readFileSync(path.resolve(ctx.cwd(), f))); }
-            catch (error) { stderr += failCli('cat', f, errorReason(error)).stderr; }
+            catch (error) { stderr += f_failCli('cat', f, f_errorReason(error)).stderr; }
         }
         return { status: stderr ? 1 : 0, stdout: Buffer.concat(chunks), stderr };
     },
+    // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
     touch(argv, ctx) {
-        const files = operandsOf(argv);
+        const files = f_operandsOf(argv);
         if (!files.length) return { status: 1, stderr: 'usage: touch file ...\n' };
-        return eachOperand('touch', files, f => {
+        return f_eachOperand('touch', files, f => {
             const filename = path.resolve(ctx.cwd(), f);
             if (!liteFs.existsSync(filename)) liteFs.writeFileSync(filename, '');
         });
     },
+    // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
     test(argv, ctx) {
         // 单条件口径：test -f|-d|-e path（退出码即判定，无输出）
         if (!argv.length) return { status: 1 };
-        const flag = flagsOf(argv)[0];
-        const target = operandsOf(argv)[0];
+        const flag = f_flagsOf(argv)[0];
+        const target = f_operandsOf(argv)[0];
         if (! ['-f', '-d', '-e'].includes(String(flag)) || !target) return { status: 1, stderr: 'usage: test -f|-d|-e path\n' };
         let st = null;
         try { st = liteFs.statSync(path.resolve(ctx.cwd(), target)); } catch { /* 不存在 */ }
@@ -163,37 +183,42 @@ const fileCommands = {
 };
 
 // 异步 cat 直接消费 stdin；EOF 到达后才处理后续文件并退出，保留输入的原始字节。
-function runCat(argv, ctx, child) {
+// 私有方法：仅在本文件实现中使用，不导出。
+function f_runCat(argv, ctx, child) {
+    // 私有方法：仅在本文件实现中使用，不导出。
     const files = argv.filter(a => a === '-' || !String(a).startsWith('-'));
     if (!files.length) files.push('-');
     let index = 0;
     let consumed = false;
     let status = 0;
-    const next = () => {
+    // 私有方法：仅在本文件实现中使用，不导出。
+    const f_next = () => {
         while (index < files.length) {
             const file = files[index++];
             if (file === '-') {
                 if (consumed || !child.stdin) continue;
                 consumed = true;
                 child.stdin.on('data', chunk => child.stdout.write(chunk));
-                child.stdin.once('end', next);
+                child.stdin.once('end', f_next);
                 return;
             }
             try { child.stdout.write(liteFs.readFileSync(path.resolve(ctx.cwd(), file))); }
-            catch (error) { status = 1; child.stderr.write(failCli('cat', file, errorReason(error)).stderr); }
+            catch (error) { status = 1; child.stderr.write(f_failCli('cat', file, f_errorReason(error)).stderr); }
         }
-        emitCli(child, { status });
+        f_emitCli(child, { status });
     };
-    next();
+    f_next();
 }
 
-for (const [name, impl] of Object.entries(fileCommands)) {
-    osCommands[`/mock-cmd/bin/${name}`] = {
+for (const [name, impl] of Object.entries(f_fileCommands)) {
+    f_osCommands[`/mock-cmd/bin/${name}`] = {
+        // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
         run(argv, ctx, child) {
-            if (name === 'cat') runCat(argv, ctx, child);
-            else emitCli(child, impl(argv, ctx));
+            if (name === 'cat') f_runCat(argv, ctx, child);
+            else f_emitCli(child, impl(argv, ctx));
         },
         // 回包统一补全 spawnSync utf8 形状（实现可只回部分字段）
+        // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
         runSync(argv, ctx) { return { status: 0, stdout: '', stderr: '', ...impl(argv, ctx) }; },
     };
 }
@@ -201,7 +226,8 @@ for (const [name, impl] of Object.entries(fileCommands)) {
 // kill：向内存子进程发信号（桥接 lite-child_process 的 pid 登记表）——支持 `kill pid`（默认
 // SIGTERM）、`kill -<SIGNAME> pid`、`kill -<num> pid`（常见号位映射）、`kill -s <SIGNAME> pid`；
 // 无此进程按真实 kill 口径 status 1 + stderr 提示
-function killRunImpl(argv) {
+// 私有方法：仅在本文件实现中使用，不导出。
+function f_killRunImpl(argv) {
     let sig = 'SIGTERM';
     const rest = [...argv];
     const head = String(rest[0] ?? '');
@@ -216,44 +242,51 @@ function killRunImpl(argv) {
     const pid = Number(rest[0]);
     if (!Number.isInteger(pid) || pid <= 0)
         return { status: 1, stdout: '', stderr: 'usage: kill [-s sigspec | -signum] pid\n' };
-    if (!liteChildProcess.signal(pid, sig))
+    if (!liteChildProcess.pkg_signal(pid, sig))
         return { status: 1, stdout: '', stderr: `kill: ${pid}: No such process\n` };
     return { status: 0, stdout: '', stderr: '' };
 }
-osCommands['/mock-cmd/usr/bin/kill'] = {
+f_osCommands['/mock-cmd/usr/bin/kill'] = {
+    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
     run(argv, _ctx, child) {
         // 微任务延迟对齐真实子进程事件时序（同步 emit 会在调用方挂上监听前丢事件）；
         // 成功静默、失败回 stderr 与非零退出码（真实 kill 口径）
         queueMicrotask(() => {
-            const r = killRunImpl(argv);
+            const r = f_killRunImpl(argv);
             if (r.stderr) child.stderr.write(Buffer.from(r.stderr));
             child.emit('exit', r.status, null);
             child.emit('close', r.status, null);
         });
     },
-    runSync(argv) { return killRunImpl(argv); },
+    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
+    runSync(argv) { return f_killRunImpl(argv); },
 };
 
-osCommands['/mock-cmd/bin/ls'] = {
-    run(argv, ctx, child) { emitCli(child, this.runSync(argv, ctx)); },
+f_osCommands['/mock-cmd/bin/ls'] = {
+    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
+    run(argv, ctx, child) { f_emitCli(child, this.runSync(argv, ctx)); },
+    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
     runSync(argv, ctx) {
+        // 私有方法：仅在本文件实现中使用，不导出。
         const target = argv.find(a => typeof a === 'string' && !String(a).startsWith('-')) || '.';
         try {
             const filename = path.resolve(ctx.cwd(), target);
             if (!liteFs.statSync(filename).isDirectory()) return { status: 0, stdout: `${target}\n`, stderr: '' };
-            const flags = flagsOf(argv).join('');
+            const flags = f_flagsOf(argv).join('');
+            // 私有方法：仅在本文件实现中使用，不导出。
             const names = liteFs.readdirSync(filename).filter(name => /[aA]/.test(flags) || !name.startsWith('.'));
             if (flags.includes('a')) names.push('.', '..');
             names.sort(); // C 语言环境下按名称排序，管道输出为逐行名单
             return { status: 0, stdout: names.length ? `${names.join('\n')}\n` : '', stderr: '' };
         } catch (error) {
-            const reason = errorReason(error);
+            const reason = f_errorReason(error);
             return { status: 1, stdout: '', stderr: `ls: ${target}: ${reason}\n` };
         }
     },
 };
 
-const pwdImpl = {
+const f_pwdImpl = {
+    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
     run(_argv, ctx, child) {
         // 异步面回显同 runSync：微任务延迟对齐真实子进程事件时序（同步 emit 会在调用方挂上监听前丢事件）
         queueMicrotask(() => {
@@ -262,16 +295,18 @@ const pwdImpl = {
             child.emit('close', 0, null);
         });
     },
+    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
     runSync(_argv, ctx) { return { status: 0, stdout: `${ctx.cwd()}\n`, stderr: '' }; },
 };
-osCommands['/mock-cmd/bin/pwd'] = pwdImpl;
-osCommands['/mock-cmd/bin/cwd'] = pwdImpl;
+f_osCommands['/mock-cmd/bin/pwd'] = f_pwdImpl;
+f_osCommands['/mock-cmd/bin/cwd'] = f_pwdImpl;
 
 // cd（shell 内建）：校验沿用 process 替身的 chdir 口径——目标按当前 cwd 解析且须为存在的目录；
 // 落点经 ctx.setCwd 回写进程环境面（假世界）。假世界外 ctx.setCwd 缺席按失败收场（真实子进程
 // 改不了父进程 cwd）
-function cdRunImpl(argv, ctx) {
-    const dir = operandsOf(argv)[0];
+// 私有方法：仅在本文件实现中使用，不导出。
+function f_cdRunImpl(argv, ctx) {
+    const dir = f_operandsOf(argv)[0];
     if (!dir) return { status: 1, stdout: '', stderr: 'usage: cd directory\n' };
     if (typeof ctx.setCwd !== 'function')
         return { status: 1, stdout: '', stderr: `cd: ${dir}: 假世界外不可切换（liteProcess.mock 后生效）\n` };
@@ -283,32 +318,37 @@ function cdRunImpl(argv, ctx) {
     ctx.setCwd(target);
     return { status: 0, stdout: '', stderr: '' };
 }
-osCommands['/mock-cmd/bin/cd'] = {
-    run(argv, ctx, child) { emitCli(child, cdRunImpl(argv, ctx)); },
-    runSync(argv, ctx) { return cdRunImpl(argv, ctx); },
+f_osCommands['/mock-cmd/bin/cd'] = {
+    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
+    run(argv, ctx, child) { f_emitCli(child, f_cdRunImpl(argv, ctx)); },
+    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
+    runSync(argv, ctx) { return f_cdRunImpl(argv, ctx); },
 };
 
-// exit（shell 内建）：同步面记录退出意图并上抛 ProcessExitError（liteProcess.exit 转调口径——
+// exit（shell 内建）：同步面记录退出意图并上抛 pkg_ProcessExitError（liteProcess.exit 转调口径——
 // 退出意图可见可捕获，由调用方决定收场）；异步面按子进程以该码退出收场（spawn 派遣层把
-// ProcessExitError 转换为子进程退出码——真实子进程调 exit(n) 即以 n 退出）
-const exitCodeOf = (argv) => {
+// pkg_ProcessExitError 转换为子进程退出码——真实子进程调 exit(n) 即以 n 退出）
+// 私有方法：仅在本文件实现中使用，不导出。
+const f_exitCodeOf = (argv) => {
     const n = Number.parseInt(String(argv[0] ?? '0'), 10);
     return Number.isInteger(n) ? n : 0;
 };
-osCommands['/mock-cmd/bin/exit'] = {
+f_osCommands['/mock-cmd/bin/exit'] = {
+    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
     run(argv, ctx, child) {
-        const code = exitCodeOf(argv);
+        const code = f_exitCodeOf(argv);
         ctx.recordExit(code);
-        emitCli(child, { status: code & 255 });
+        f_emitCli(child, { status: code & 255 });
     },
+    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
     runSync(argv, ctx) {
-        const code = exitCodeOf(argv);
+        const code = f_exitCodeOf(argv);
         ctx.recordExit(code);
-        throw new ProcessExitError(code & 255);
+        throw new pkg_ProcessExitError(code & 255);
     },
 };
 
 // 命令表导出（纯定义、零副作用）：系统级命令集由 lite-cmd-mgr 导入时自动协同加载注册。
 // 显式 import 本模块无副作用（kill 需要的 signal 在 lite-child_process，模块内已 import）。
-export const COMMANDS = osCommands;
-export default COMMANDS;
+// 内部导出：仅供 mgr 登记命令实现，测试通过 child_process 的公共入口验证。
+export const pkg_COMMANDS = f_osCommands;

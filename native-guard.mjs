@@ -12,7 +12,8 @@ export async function resolve(specifier, context, next) {
   const builtin = isBuiltin(specifier);
   const name = specifier.startsWith('node:') ? specifier : `node:${specifier}`;
   const result = await next(specifier, context);
-  if ((builtin && !allowed.has(name)) || (!builtin && !result.url.startsWith(root))) {
+  const packageHit = [...allowed].some((entry) => !entry.startsWith('node:') && specifier.startsWith(entry));
+  if ((builtin && !allowed.has(name)) || (!builtin && !result.url.startsWith(root) && !packageHit)) {
     const message = `未声明的环境模块：${specifier}`;
     port.postMessage(message);
     throw new Error(message);

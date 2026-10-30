@@ -12,7 +12,7 @@ import http from 'node:http';
 import net from 'node:net';
 import liteHttp from '../lite-http.mjs';
 import liteServer from '../lite-server.mjs';
-import { referenceHandler, requestSnapshot } from './lite-http.test.mjs'; // 对照夹具迁至 lite-http.test.mjs（http-reference.mjs 已删）
+import { referenceHandler, requestSnapshot, _urlInjectionRequest } from './lite-http.test.mjs'; // 对照夹具迁至 lite-http.test.mjs（http-reference.mjs 已删）
 
 function get(port, path) {
   return new Promise((resolve) => {
@@ -263,10 +263,10 @@ test('socket 前端：真 TCP GET/POST 回灌管线、账本契约、缓存头�
     const post = await realPost(port, '/api/echo', '载荷');
     // 账本断言须在 run 内完成：withBoard 收尾 unmock 后账本随实例丢弃
     const recs = liteServer.requests().filter((r) => r.path === '/api/echo' || r.path === '/style.css');
-    const live = liteServer.liveRequests();
-    const liveLen = live.length;
-    liteServer.resetRequests(); // 原地清空不换引用（须在 run 内：unmock 后为 no-op）
-    return { api, asset, post, port, recs, liveLen, liveCleared: live.length };
+    assert.equal(liteServer.liveRequests, undefined, '活账本不应作为公共方法导出');
+    const snapshot = liteServer.requests();
+    liteServer.resetRequests(); // 须在 run 内清空：unmock 后无内存账本
+    return { api, asset, post, port, recs, snapshotLength: snapshot.length, clearedLength: liteServer.requests().length };
   });
   // 预期 1：真实 socket 请求应答真实 handler 的 200
   assert.equal(out.api.status, 200, '真实 socket 请求应答真实 handler 的 200');
@@ -296,10 +296,10 @@ test('socket 前端：真 TCP GET/POST 回灌管线、账本契约、缓存头�
   assert.equal(api.response.json.ok, true, 'response 应带解析后的 JSON 回包');
   // 预期 11：真实路由产物同引 serverResponse
   assert.equal(api.serverResponse, api.response, '真实路由产物应同引 serverResponse');
-  // 预期 12：活账本与快照同源
-  assert.equal(out.liveLen, 3, '活账本与快照同源');
-  // 预期 13：resetRequests 原地清空不换引用
-  assert.equal(out.liveCleared, 0, 'resetRequests 原地清空不换引用');
+  // 预期 12：清空内部账本不改变已获取的快照
+  assert.equal(out.snapshotLength, 3, '已获取的请求快照应保留原有记录');
+  // 预期 13：清空后重新读取快照应为空
+  assert.equal(out.clearedLength, 0, 'resetRequests 后的新快照应为空');
 });
 
 /** 场景：故障对 socket 流量生效——传输层 503 与服务端 wait 闸门对真 TCP 客户端同样生效。 */
@@ -476,4 +476,77 @@ test('未 listen 即 close：回调即时送达', async () => {
     liteServer.unmock();
     liteHttp.unmock();
   }
+});
+
+
+/** 场景：URL 定向故障在内存直调和真实 socket 回灌中一致，保留 Host、方法与查询隔离。 */
+test('URL 回灌：两层故障、Host 来源、方法、查询与 once 一致', async () => {
+  await withBoard((req, res) => res.end('handler'), async port => {
+    for (const injector of [liteHttp, liteServer]) {
+      for (const client of [liteHttp, http]) {
+        const send = (path, extra = {}) => _urlInjectionRequest(client, { hostname: '127.0.0.1', port, path, headers: { Host: `public.test:${port}` }, ...extra });
+        // 输入：socket 连接仍指向回环地址，注入 URL 使用原始 Host，并同时限定 POST 和查询串
+        injector.inject({ url: `http://public.test:${port}/same?a=1`, method: 'POST', status: 503, once: true });
+        const misses = [await send('/same?a=2', { method: 'POST' }), await send('/same?a=1'),
+          await send('/same?a=1', { method: 'POST', headers: { Host: `other.test:${port}` } })];
+        // 预期 1：未命中的查询、方法与 Host 不消耗 once，直调与回灌结果一致
+        assert.deepEqual(misses.map(out => out.status), [200, 200, 200], '其他 URL 或方法应收到真实回包');
+        assert.equal((await send('/same?a=1', { method: 'POST' })).status, 503, '原始 Host 的完整 URL 应命中');
+        assert.equal((await send('/same?a=1', { method: 'POST' })).status, 200, '命中后 once 应自毁');
+        // 输入：路径 URL 不限定 origin，fragment 忽略，重复查询参数顺序精确
+        const remove = injector.inject({ url: '/same?x=1&x=2#ignored', status: 502 });
+        // 预期 2：两条请求管线都保留路径 URL 的完整查询语义
+        assert.equal((await send('/same?x=1&x=2')).status, 502, '路径 URL 应命中任意 Host');
+        assert.equal((await send('/same?x=2&x=1')).status, 200, '查询参数顺序不能颠倒');
+        remove(); remove();
+        assert.equal((await send('/same?x=1&x=2')).status, 200, '移除 URL 规则应幂等恢复');
+      }
+    }
+    // 预期 3：服务端非法 URL 在登记时拒绝
+    for (const url of ['', 'relative', '//example.test/same', 'ftp://example.test/same', 1, {}])
+      assert.throws(() => liteServer.inject({ url, status: 503 }), /url/, '非法 URL 应在注入时拒绝');
+  });
+});
+
+/** 场景：URL 定向 wait 只挂起目标请求，未命中正常响应，once 在放行前已消耗。 */
+test('URL 闸门：两层 wait 只挂目标、未命中直通、once 放行前自毁', async () => {
+  await withBoard((req, res) => res.end('handler'), async port => {
+    for (const injector of [liteHttp, liteServer]) {
+      const gate = Promise.withResolvers();
+      const send = path => _urlInjectionRequest(http, { hostname: '127.0.0.1', port, path });
+      injector.inject({ url: '/same?held=1', wait: gate.promise, once: true });
+      let settled = false;
+      // 输入：真实 socket 请求命中路径 URL 闸门，另一个查询 URL 不命中
+      const before = liteServer.requests().length;
+      const held = send('/same?held=1').then(out => { settled = true; return out; });
+      try {
+        for (let i = 0; i < 100 && liteServer.requests().length === before; i++) await sleep(5);
+        assert.equal(liteServer.requests().length, before + 1, '目标请求应已进入回灌管线');
+        // 预期 1：目标仍等待，未命中 URL 与第二次目标请求均不被 once 闸门挂住
+        assert.equal(settled, false, '目标 URL 应等待闸门');
+        assert.equal((await send('/same?held=2')).status, 200, '其他查询应直通');
+        assert.equal((await send('/same?held=1')).status, 200, 'once 应在首个请求命中时消耗');
+      } finally { gate.resolve(); await held; }
+      // 预期 2：放行后目标仍收到真实 handler 回包
+      assert.equal((await held).body, 'handler', '闸门放行后应保留真实回包');
+    }
+  });
+});
+
+
+/** 场景：异步 handler 拒绝时回 500，同一服务后续请求仍能正常完成。 */
+test('异步 handler 失败：拒绝转为 500，后续请求仍成功', async () => {
+  // 输入：通过服务创建接口登记会拒绝的业务 handler，经真实 socket 请求触发
+  await withBoard(async (req, res) => {
+    if (req.url === '/reject') throw new Error('handler-rejected');
+    res.end('healthy');
+  }, async port => {
+    const failed = await realGet(port, '/reject');
+    const healthy = await realGet(port, '/healthy');
+    // 预期：错误作为响应可见，不破坏后续请求
+    assert.equal(failed.status, 500, '异步拒绝应得到 500');
+    assert.deepEqual(JSON.parse(failed.body), { error: 'handler-rejected' }, '回包应说明 handler 失败原因');
+    assert.equal(healthy.status, 200, '后续请求应正常响应');
+    assert.equal(healthy.body, 'healthy', '后续回包应来自 handler');
+  });
 });

@@ -12,7 +12,7 @@ const swallow = () => {};
 export async function buildProcessEnvironment(options = {}) {
   const { initialData = () => {}, timeoutMs = 10_000, ...settings } = options;
   assert.ok(settings.srcRoot && settings.projectRoot, '进程环境需要 srcRoot 与 projectRoot');
-  const allowed = ['srcRoot', 'projectRoot', 'env', 'now', 'initialStorage'];
+  const allowed = ['srcRoot', 'projectRoot', 'env', 'now', 'initialStorage', 'packageAllowlist'];
   assert.ok(Object.keys(settings).every(key => allowed.includes(key)), '原生试点存在尚未支持的装配选项');
   assert.ok(Number.isFinite(timeoutMs) && timeoutMs > 0, '进程通信超时必须为正数');
   const volume = new Volume(), filesystem = createFsFromVolume(volume);

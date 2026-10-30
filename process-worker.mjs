@@ -42,7 +42,7 @@ host.on('message', async ({ id, operation, args }) => {
         // memfs 保持初始化期唯一写通道；数据在父进程执行用户播种后传入。
         filesystem.__vol.fromJSON(files);
         snapshot = createSnapshotReader(filesystem.__vol);
-      }, loadModules: loadNativeModules });
+      }, loadModules: (opts) => loadNativeModules({ ...opts, packageAllowlist: options.packageAllowlist }) });
     } else if (operation === 'request') {
       value = await environment.http.request(...args);
     } else if (operation === 'fault') {

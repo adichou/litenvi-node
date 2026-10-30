@@ -10,8 +10,8 @@ import { pathToFileURL } from 'node:url';
 import liteChildProcess from '../lite-child_process.mjs';
 import { liteProcess } from '../lite-process.mjs';
 import mgr from '../lite-cmd-mgr.mjs';
-import { NODE_COMMAND_PATH } from '../lite-cmd-node.mjs';
 
+const NODE_COMMAND_PATH = '/mock-cmd/usr/local/bin/node';
 const selfFile = new URL(import.meta.url).pathname;
 const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));
 // 逐用例装配：内存卷（命令执行寻址依赖）+ spawn 边界
@@ -36,6 +36,23 @@ function writeFixture(code) {
   realFs.writeFileSync(name, `import liteFs from '${liteFsUrl}';\n${code}\n`);
   return name;
 }
+
+/** 场景：宿主未安装 npm 时，版本探测通过公开执行结果报告失败。 */
+test('npm 环境缺失：空 PATH 时版本查询明确失败', () => {
+  const done = setup();
+  const originalPath = process.env.PATH;
+  try {
+    // 输入：当前运行环境没有任何 npm 搜索目录，不替换命令实现或私有缓存
+    process.env.PATH = '';
+    const result = liteChildProcess.spawnSync('npm', ['-v'], { encoding: 'utf8' });
+    // 预期：启动边界正常，但命令执行失败并给出依赖缺失原因
+    assert.equal(result.status, 1, '缺少 npm 安装时探测应失败');
+    assert.match(result.stderr, /无法读取当前 npm 的版本元数据/, '失败说明应指出缺失的安装元数据');
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+    done();
+  }
+});
 
 /** 场景：原生对照隔离调试器预加载和强制颜色，业务环境变量与脚本自身 stderr 保持可见。 */
 test('原生对照环境：调试器与颜色设置不污染输出，业务 stderr 保留', () => {
@@ -456,4 +473,85 @@ test('npm 参数边界：非 -v 参数按失败收场', () => {
   } finally {
     done();
   }
+});
+
+
+/** 场景：-- 结束选项解析，脚本与 stdin 两条公共执行路径均能输出结果。 */
+test('Node 选项终止符：-- 后运行脚本，无脚本时读取 stdin', async () => {
+  const done = setup();
+  const fixture = writeFixture('console.log(process.argv.slice(2).join("|"));');
+  const run = (args, input) => {
+    const child = liteChildProcess.spawn('node', args);
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const closed = liteChildProcess.waitForClose(child);
+    child.stdin.end(input);
+    return closed.then(result => ({ ...result, stdout, stderr }));
+  };
+  try {
+    // 输入：脚本名后的 -flag 是 argv；只有 -- 时通过 stdin 提供 JavaScript
+    assert.deepEqual(await run(['--', fixture, '-flag']), { code: 0, signal: null, stdout: '-flag\n', stderr: '' }, '终止符后的脚本参数应保持字面值');
+    assert.deepEqual(await run(['--'], 'console.log("stdin-after-separator")'),
+      { code: 0, signal: null, stdout: 'stdin-after-separator\n', stderr: '' }, '无脚本名时应执行 stdin');
+  } finally { done(); realFs.unlinkSync(fixture); }
+});
+
+/** 场景：脚本重设 process 字段仅影响虚拟运行态，宿主同时写 argv 后仍能恢复。 */
+test('Process 字段写入：脚本与宿主环境保持各自视图', async () => {
+  const done = setup();
+  const originalArgv = process.argv;
+  const originalEnv = process.env;
+  try {
+    // 输入：脚本从原生 process 入口写字段，并在退出前保持活动
+    const child = liteChildProcess.spawn('node', ['-e', `
+      const nativeProcess = require('node:process');
+      nativeProcess.argv = ['script-argv'];
+      nativeProcess.env = { MARK: 'script-env' };
+      nativeProcess.execArgv = ['script-exec-argv'];
+      process.liteCoverageMarker = 'shared-property';
+      console.log(JSON.stringify([process.argv, process.env.MARK, process.execArgv, process.liteCoverageMarker]));
+      delete process.liteCoverageMarker;
+      setInterval(() => {}, 1000);
+    `]);
+    const closed = liteChildProcess.waitForClose(child);
+    try {
+      const output = await new Promise(resolve => child.stdout.once('data', chunk => resolve(chunk.toString())));
+      // 预期：脚本可以写自己的 process 字段，宿主不读取到这些虚拟值
+      assert.deepEqual(JSON.parse(output), [['script-argv'], 'script-env', ['script-exec-argv'], 'shared-property'], '脚本应看到自己的写入');
+      assert.equal(process.env, originalEnv, '宿主环境对象不应被脚本替换');
+      process.argv = [...originalArgv, 'host-argv'];
+      assert.equal(process.argv.at(-1), 'host-argv', '宿主上下文仍能写自己的 argv');
+    } finally { process.argv = originalArgv; child.kill(); await closed; }
+    assert.equal(process.argv, originalArgv, '运行结束后宿主 argv 引用应恢复');
+    assert.equal(process.liteCoverageMarker, undefined, '脚本创建的共享属性应已自行清理');
+  } finally { process.argv = originalArgv; done(); }
+});
+
+/** 场景：终止持有监听服务的脚本时，服务资源也随命令释放。 */
+test('活动服务清理：终止 Node 后关闭其监听端口', async () => {
+  const done = setup();
+  liteServer.mock();
+  const serverUrl = new URL('../lite-server.mjs', import.meta.url).href;
+  const fixture = writeFixture(`
+    import server from '${serverUrl}';
+    server.createServer((_req, res) => res.end('active')).listen(0, () => console.log('ready'));
+  `);
+  try {
+    // 输入：脚本保持服务监听，从公共子进程句柄终止它
+    const child = liteChildProcess.spawn('node', [fixture]);
+    const closed = liteChildProcess.waitForClose(child);
+    await new Promise(resolve => child.stdout.once('data', resolve));
+    const port = liteServer.port();
+    assert.ok(port > 0, '终止前服务应有实际监听端口');
+    child.kill();
+    // 预期：子进程以信号结束，服务监听已解除
+    assert.deepEqual(await closed, { code: null, signal: 'SIGTERM' }, '终止信号应反映在子进程结果上');
+    const { default: http } = await import('node:http');
+    const connection = await new Promise(resolve => {
+      http.get({ hostname: '127.0.0.1', port }, response => { response.resume(); resolve('connected'); })
+        .on('error', error => resolve(error.code));
+    });
+    assert.equal(connection, 'ECONNREFUSED', '命令结束后原端口应拒绝新连接');
+  } finally { done(); liteServer.unmock(); realFs.unlinkSync(fixture); }
 });

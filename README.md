@@ -42,7 +42,10 @@ remove();
 
 ## lite-http 门面
 
-`litenvi-node/lite-http.mjs` 是 node:http 客户端的可切换门面，供业务代码统一 import：默认（未设置内存实现）原样转发真实 `node:http`，生产行为不变。`mock()` 设置内存 http 实现（幂等，复用当前实例）、`unmock()` 移除并回到真实实现（规则随实例丢弃）。错误注入是内存实现上的能力：`inject({ method?, path?, status: 400..599, error?/body? })` 增加规则并返回移除函数——命中收到注入的错误响应（如 500 模拟心跳接口不可达），未命中按 `ECONNREFUSED` 拒连（接口无法访问）。回调式 `request/get` 与真实 ClientRequest 消费面兼容（statusCode / data / end / error 事件）；状态为模块级单例，同进程内经同一 specifier 导入（含动态 `import()`）共享同一实例。
+`litenvi-node/lite-http.mjs` 是 node:http 客户端的可切换门面，供业务代码统一 import：默认（未设置内存实现）原样转发真实 `node:http`，生产行为不变。`mock()` 设置内存 http 实现（幂等，复用当前实例）、`unmock()` 移除并回到真实实现（规则随实例丢弃）。错误注入是内存实现上的能力：`inject({ url?, method?, path?, query?, status?: 400..599, wait?, once?, error?/body? })` 增加规则并返回移除函数；至少指定错误状态或 Promise 闸门。命中传输层错误时不执行 handler；未命中则经 `lite-server` 执行真实 handler，无监听服务时按 `ECONNREFUSED` 拒连。`liteServer.inject()` 使用相同匹配条件，作用于 handler 执行后的响应阶段。回调式 `request/get` 与真实 ClientRequest 消费面兼容（statusCode / data / end / error 事件）；状态为模块级单例，同进程内经同一 specifier 导入（含动态 `import()`）共享同一实例。
+
+
+两个入口均支持按 URL 注入，例如 `liteHttp.inject({ url: 'http://localhost:8080/api/health?full=1', method: 'GET', status: 503, once: true })`，或 `liteServer.inject({ url: '/api/health?full=1', status: 503 })`。`url` 接受字符串或 `URL` 对象：绝对 HTTP/HTTPS URL 精确比较规范化后的 origin、pathname 和 search（主机名大小写、默认端口按 URL 标准规范化），以 `/` 开头的路径 URL 只比较 pathname 和 search；两者均忽略 fragment。查询串按完整顺序精确比较，额外参数、重复参数的顺序变化也不会命中；需要忽略查询串时继续使用 `path`，需要部分查询匹配时使用 `query`。`url/method/path/query` 同时提供时全部满足才命中；不指定 `method` 时适用于所有 HTTP 方法，不指定任何匹配条件时保持全局规则。请求 origin 优先采用请求的 `Host` 头，缺省使用请求配置的 hostname/host 和端口；真实 socket 回灌保留原始 Host，不会因为内部连接回环地址而改变匹配来源。`once` 仅在完整匹配时消耗，`wait` 也只挂起匹配的 URL。
 
 ## lite-process 门面
 
@@ -51,6 +54,16 @@ remove();
 ## lite-fs 门面
 
 `litenvi-node/lite-fs.mjs` 与 lite-http/lite-process 同机制，面向 `node:fs`，但**按作用域收窄——只接管系统运行数据**：`mock({ roots })` 声明运行数据根（看板数据目录/注册表/日志，文件或目录均可，必填）；根内操作走内存卷（同步面 existsSync/readFileSync/writeFileSync/mkdirSync/readdirSync/statSync/lstatSync/realpathSync/rmSync/unlinkSync/rmdirSync/renameSync/copyFileSync/cpSync/appendFileSync/accessSync/openSync/closeSync/createReadStream/chmodSync/symlinkSync，按真实 fs 错误语义抛 ENOENT/EEXIST/EISDIR/ENOTDIR/ENOTEMPTY/EBADF）；**根外一律原样走真实 fs**——模块源码、静态资源、代码 mtime 等系统本体文件不依赖 lite-fs（Node 模块加载器本身也不经门面）。默认（未 mock）全量转发真实 fs。`inject({ op?, path?, code })` 对根内命中操作抛指定 code 的 fs 错误（如 EACCES 模拟写入失败），返回移除函数；根内触到未实现面明确报错，不静默落真实磁盘；无路径参数的操作（fd 类）落在内存卷；多路径操作任一端在根内即按内存卷处理。
+
+## lite-child_process 执行接口
+
+`lite-child_process` 提供 `spawn/spawnSync`、`exec/execSync`、`execFile/execFileSync`。默认转发原生 Node；`mock()` 后全部经内存命令分派并统一记入 `calls()`，`reset()` 仅清账本。
+
+`execFile(file, args?, options?, callback?)` 按字面 argv 执行，默认以 UTF-8 字符串回调 `(error, stdout, stderr)`；异步接口返回子进程，支持超时、AbortSignal、maxBuffer 和 `promisify`（Promise 上有 `child`，成功值为 `{ stdout, stderr }`）。同步接口默认返回 Buffer，非零退出或启动失败时抛出携带执行结果的错误。
+
+`exec(command, ...)` 使用内存 `/bin/sh -c`；exec 适配和 shell 实现均为 `lite-child_process.mjs` 的私有方法，解析复用 `shell-quote@1.12.0`（MIT）。当前支持普通引号、初始环境变量展开、`;`/`&&`/`||`、缓冲管道、`<`/`>`/`>>`、`1>&2`/`2>&1` 和局部 `cd`。命令替换、通配符、循环等完整 shell 语法尚未实现；mock 不启动真实 shell。Node 脚本的同步执行限制保持现状；`fork/IPC` 尚未提供。
+
+`mgr.command(nameOrPath)` 查询已登记的配置句柄，可在安装前配置 `onRun/inject`；`mgr.pkg_resolve(nameOrPath)` 是产品内部执行寻址接口，要求命令文件存在，首次可惰性安装系统命令。命令对象的 `inject/onRun` 为公开配置接口，不再提供 `mgr.inject`；`pkg_takeFault/pkg_runSync` 供内部执行层协作，pkg_ 前缀表示仅限同一 package 内的模块调用；测试通过上述 child_process 公共接口触发执行。
 
 ## 验证
 
@@ -132,3 +145,13 @@ try {
 业务代码 `spawn('/mock/node', [entry, ...args])` 在原生后端同样可用：fork 出独立进程以同一套世界装配（`runChildWorld`）执行真实入口源码——进程边界即模块缓存边界，每次 spawn 都重新加载依赖图；子进程拥有独立 argv / stdout / stderr / exit 语义（`process.exit` 与 `process.exitCode` 都折算为退出码）。世界共享按「fork 时快照进入、退出快照回流」实现：入口可见父世界 fs / Git / 时钟现值，结束后写入、删除（含按 fork 快照判定的删除）与 Git 状态整体回流父世界；子世界内的未声明调用逐条并入父世界记账，收口不放过。失败路径同样回流部分写入的世界事实。`stdin` 选项沿用 VM 口径（子世界以 fd 0 `readFileSync` 读到预置载荷）。子世界独立 FakeTimers 无人推进：入口若等待自身定时器会挂起，适用于 CLI 型同步入口。
 
 清理会取消在途内存请求、恢复业务全局、清空快照并等待子进程退出；重复清理复用同一结果。未声明调用、异常退出、通信超时或需要强制终止的进程都不能误报通过。模块白名单用于测试边界检查；普通 Node 子进程与 module Mock 不提供运行不可信代码的安全沙箱。
+
+## 方法隔离
+
+模块级私有变量、常量与文件内辅助方法统一使用 `f_` 前缀，不导出。包内共享的变量与方法使用 `pkg_` 前缀，其余公共接口不加前缀。函数参数与临时局部数据变量保留语义名称；原生 API、命令实现协议和请求/响应数据字段保留原名。导出方法以 `pkg_` 开头时属于包内协作接口，测试应通过公共入口验证；其余导出方法允许所有调用方使用。此约定通过名称和方法注释表达。
+
+`mgr.pkg_defineCommand/pkg_resolve`、命令条目的 `pkg_takeFault/pkg_runSync`、`liteProcess` 模块的 `pkg_commandContext`、`liteChildProcess.pkg_signal`、`liteServer.pkg_handle` 为内部接口。`lite-cmd-node/-os` 的命令表和 Node 路径常量以 `pkg_` 导出；`lite-cmd-git` 仅通过导入完成登记，不再导出原始命令条目。`f_installArgv`、`f_liveRequests` 与 exec/shell 辅助方法保持文件内私有。
+
+`mock()` 返回公共门面，私有运行态不作为返回值暴露。`isMocked()` 是公开的状态查询；`liteFs.markPersistent()` 是公开的持久目录配置，均允许测试使用。命令实现的 `run/runSync` 是登记实现时的协议名，保持原名。
+
+`lite-cmd-mgr` 的 `f_install()` 仅在本文件内使用，不挂到默认导出对象；命令文件由公共执行入口触发惰性安装，测试不直接调用安装方法。

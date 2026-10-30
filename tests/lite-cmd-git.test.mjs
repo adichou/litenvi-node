@@ -1091,3 +1091,149 @@ test('存储模型：.git 目录布局与对象文件形态', () => {
     done();
   }
 });
+
+/** 场景：真实 Git 与内存 Git 重放祖先引用、路径恢复、混合重置、分离 HEAD 与快进合并。 */
+test('真实 Git 对照：祖先引用、路径恢复、分离 HEAD 与快进合并', () => {
+  const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'lite-git-extra-'));
+  const realRoot = nativeFs.realpathSync(temporary);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+  Object.assign(env, { LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' });
+  const config = ['-c', 'user.name=Coverage', '-c', 'user.email=coverage@example.invalid', '-c', 'commit.gpgSign=false',
+    '-c', 'core.hooksPath=/dev/null', '-c', 'advice.detachedHead=false'];
+  const scenario = (root, fileSystem) => {
+    const output = [];
+    const git = args => liteChildProcess.spawnSync('git', [...config, ...args], { cwd: root, env, encoding: 'utf8' });
+    const run = args => { const result = git(args); output.push([args.join(' ').replaceAll(root, '<root>').replace(/\b[0-9a-f]{40}\b/g, '<sha>'), result.status]); return result; };
+    const put = text => fileSystem.writeFileSync(root + '/tracked', text);
+    // 输入：两个提交，第二次按显式路径提交；祖先表达式只对比关系，不依赖生成的提交号
+    run(['init', '-q', '-b', 'main']); put('first\n'); run(['add', 'tracked']); run(['commit', '-q', '-m', 'first']);
+    const first = git(['rev-parse', 'HEAD']).stdout.trim();
+    put('second\n'); run(['commit', '-q', '-m', 'second', 'tracked']);
+    const second = git(['rev-parse', 'HEAD']).stdout.trim();
+    output.push(['ancestors', git(['rev-parse', 'HEAD~1']).stdout.trim() === first,
+      git(['rev-parse', 'HEAD^']).stdout.trim() === first, git(['rev-parse', 'HEAD^0']).stdout.trim() === second]);
+    // 输入：按提交恢复路径，未匹配路径和未知引用必须报告失败
+    run(['checkout', 'HEAD~1', '--', 'tracked']); output.push(['restored', fileSystem.readFileSync(root + '/tracked', 'utf8')]);
+    run(['checkout', 'HEAD', '--', 'absent']); run(['checkout', 'no-reference', '--', 'tracked']);
+    run(['reset', 'HEAD']); output.push(['index', git(['diff', '--cached', '--name-only']).stdout]);
+    run(['checkout', 'HEAD', '--', 'tracked']);
+    output.push(['listed', run(['ls-files', '--cached', 'tracked']).stdout]);
+    fileSystem.writeFileSync(root + '/.gitignore', 'ignored/\n');
+    run(['check-ignore', 'ignored/child']); run(['check-ignore', '-q', 'tracked']);
+    run(['add']); run(['rev-parse', 'no-reference']); run(['switch', '-c', 'invalid', 'no-reference']);
+    // 输入：分离 HEAD 后提交、重置和重放提交；观察 HEAD 引用和文件内容
+    run(['checkout', '--detach', first]); put('detached\n'); run(['add', 'tracked']); run(['commit', '-q', '-m', 'detached']);
+    output.push(['detached', git(['symbolic-ref', '-q', 'HEAD']).status]);
+    run(['reset', '--soft', first]); run(['reset', '--hard', first]); run(['cherry-pick', second]);
+    output.push(['replayed', fileSystem.readFileSync(root + '/tracked', 'utf8')]);
+    // 输入：在分支上推进一次提交，返回 main 做快进合并
+    run(['switch', 'main']); run(['switch', '-c', 'feature']); put('feature\n'); run(['add', 'tracked']); run(['commit', '-q', '-m', 'feature']);
+    run(['switch', 'main']); const merged = run(['merge', 'feature']);
+    output.push(['fast-forward', /Fast-forward/.test(merged.stdout), fileSystem.readFileSync(root + '/tracked', 'utf8')]);
+    // 输入：第二个独立工作树需在已有登记中查找分支占用，并继续创建
+    run(['branch', 'linked-one']); run(['branch', 'linked-two']);
+    run(['worktree', 'add', root + '/linked-one', 'linked-one']);
+    run(['worktree', 'add', root + '/linked-two', 'linked-two']);
+    output.push(['linked-content', fileSystem.readFileSync(root + '/linked-two/tracked', 'utf8')]);
+    return output;
+  };
+  try {
+    const expected = scenario(realRoot, nativeFs);
+    const done = setup();
+    try {
+      liteFs.mkdirSync('/mock/git-extra', { recursive: true });
+      // 预期：命令退出码、祖先关系、索引与文件效果与真实 Git 一致
+      assert.deepEqual(scenario('/mock/git-extra', liteFs), expected, '扩展 Git 场景应与原生命令一致');
+    } finally { done(); }
+  } finally { nativeFs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+/** 场景：读取待暂存文件失败时，同步和异步 Git 都报告失败且不提交部分暂存结果。 */
+test('Git 文件故障：add 遇到 EACCES/EIO 失败，索引保留，撤销后恢复', async () => {
+  const done = setup();
+  let remove;
+  try {
+    for (const code of ['EACCES', 'EIO']) {
+      const root = '/mock/git-fault-' + code.toLowerCase();
+      const run = volumeGit(root);
+      run(['init', '-q', '-b', 'main']);
+      write(root, 'preserved', 'previously-staged');
+      write(root, 'readable', 'readable-content');
+      write(root, 'tracked', 'content');
+      assert.equal(run(['add', 'preserved']).status, 0, '预先暂存应成功');
+      // 输入：公开故障注入仅阻断 tracked；同次 add 先处理可读文件，再遇到读取失败
+      remove = liteFs.inject({ op: 'readFileSync', path: root + '/tracked', code });
+      const asyncAdd = async () => {
+        const child = liteChildProcess.spawn('git', ['add', 'readable', 'tracked'], { cwd: root });
+        let stdout = '', stderr = '';
+        child.stdout.on('data', chunk => { stdout += chunk; });
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        const closed = await liteChildProcess.waitForClose(child);
+        return { status: closed.code, signal: closed.signal, stdout, stderr };
+      };
+      for (const execute of [() => run(['add', 'readable', 'tracked']), asyncAdd]) {
+        const failed = await execute();
+        // 预期 1：通过命令回包报告读取失败，不能返回成功或提前输出成功内容
+        assert.equal(failed.status, 128, `${code} 应使 add 失败`);
+        assert.equal(failed.stdout, '', '失败时不应有成功输出');
+        assert.ok(failed.stderr.includes(code), '错误回包应保留底层错误码');
+        // 预期 2：保留旧暂存项，不将同次操作的部分可读文件写入索引
+        assert.equal(run(['ls-files']).stdout, 'preserved\n', '失败后索引应保持原状');
+      }
+      remove(); remove = undefined;
+      // 预期 3：移除故障后两个文件均可正常暂存
+      assert.equal(run(['add', 'readable', 'tracked']).status, 0, '移除故障后应能正常暂存');
+      assert.equal(run(['ls-files']).stdout, 'preserved\nreadable\ntracked\n', '恢复后应包含所有暂存项');
+    }
+  } finally { remove?.(); done(); }
+});
+
+/** 场景：文件删除仍作为工作树差异处理，不能误报文件读取故障。 */
+test('工作树删除：diff 展示删除，add 正常暂存删除', () => {
+  const done = setup();
+  try {
+    const root = '/mock/git-deleted-read';
+    const run = volumeGit(root);
+    run(['init', '-q', '-b', 'main']);
+    write(root, 'tracked', 'content\n');
+    run(['add', 'tracked']);
+    assert.equal(run(['commit', '-q', '-m', 'baseline']).status, 0, '基线提交应成功');
+    // 输入：经公共文件接口删除已提交的工作树文件，再调用 Git 命令
+    liteFs.unlinkSync(root + '/tracked');
+    const diff = run(['diff', 'HEAD', '--', 'tracked']);
+    // 预期：缺失文件表现为删除，读取逻辑不会将 ENOENT 当成不可恢复故障
+    assert.equal(diff.status, 0, '工作树文件删除仍应能查看差异');
+    assert.match(diff.stdout, /\+\+\+ \/dev\/null/, '差异应标明文件已删除');
+    assert.match(diff.stdout, /-content/, '差异应包含删除的文件内容');
+    assert.equal(run(['add', 'tracked']).status, 0, '应能正常暂存删除');
+    assert.equal(run(['ls-files']).stdout, '', '已删除文件应从索引移除');
+  } finally { done(); }
+});
+
+/** 场景：磁盘写满通过公共故障接口注入，Git 返回失败而非抛出未处理异常。 */
+test('Git 写入失败：ENOSPC 通过命令结果报告，撤销后可恢复', () => {
+  const done = setup();
+  let remove;
+  try {
+    const run = volumeGit('/mock/git-full');
+    run(['init', '-q', '-b', 'main']);
+    write('/mock/git-full', 'tracked', 'content');
+    // 输入：模拟本次暂存期间整个文件系统无法写入，不指定 Git 内部布局路径
+    remove = liteFs.inject({ op: 'writeFileSync', code: 'ENOSPC' });
+    const result = run(['add', 'tracked']);
+    // 预期：命令失败携带错误码，恢复写入能力后可继续操作
+    assert.equal(result.status, 128, '写满应使暂存命令失败');
+    assert.match(result.stderr, /ENOSPC/, '回包应包含底层写入失败原因');
+    remove(); remove = undefined;
+    assert.equal(run(['add', 'tracked']).status, 0, '恢复写入后应可暂存');
+  } finally { remove?.(); done(); }
+});
+
+
+/* 剩余未覆盖行的黑盒用例设计（按本轮源文件行号）：
+ * 133、154：截断真实/内存仓库的标准 .git/HEAD，再经 spawnSync('git', ['status'/'commit'])
+ * 对比无效仓库的错误码、stderr 和文件副作用；不直接调用 HEAD 解析函数。
+ * 231：经 spawnSync('git', ['check-ignore', '']) 提交空路径参数，与真实 Git 的无效 pathspec
+ * 结果对照。原生 Git 返回 128；当前逻辑可能只返回未匹配，需作为行为差异处理。
+ * 上述防御输入尚未作为通过用例，不能据此宣称这些行已经覆盖或行为已经一致。
+ */

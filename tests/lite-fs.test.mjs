@@ -262,3 +262,105 @@ test('幂等与恢复：重复 mock 保留卷、unmock 后卷内路径按真实 
   // 预期 2：回到真实 fs（该路径真实磁盘不存在）
   assert.equal(liteFs.existsSync(`${ROOT}/keep`), false, 'unmock 后应回到真实 fs（该路径真实磁盘不存在）');
 });
+
+
+/** 场景：目录、链接与访问操作的成功/失败结果与真实 fs 一致，不读取内存实现。 */
+test('真实 FS 对照：目录改名与删除、访问失败、符号链接和读流', async () => {
+  const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-fs-extra-'));
+  const scenario = async (fileSystem, root) => {
+    const observed = [];
+    const errorCode = operation => { try { operation(); return null; } catch (error) { return error.code; } };
+    // 输入：用普通文件阻断 mkdir，再移动目录并通过公共接口访问文件与链接
+    fileSystem.mkdirSync(root + '/directory');
+    fileSystem.writeFileSync(root + '/file', 'stream-body');
+    observed.push(errorCode(() => fileSystem.mkdirSync(root + '/file')));
+    observed.push(errorCode(() => fileSystem.mkdirSync(root + '/file/child', { recursive: true })));
+    fileSystem.renameSync(root + '/directory', root + '/moved');
+    observed.push(fileSystem.statSync(root + '/moved').isDirectory());
+    fileSystem.rmdirSync(root + '/moved');
+    observed.push(fileSystem.existsSync(root + '/moved'));
+    observed.push(errorCode(() => fileSystem.accessSync(root + '/file')));
+    observed.push(errorCode(() => fileSystem.accessSync(root + '/missing')));
+    observed.push(fileSystem.realpathSync(root + '/file') === root + '/file');
+    fileSystem.symlinkSync(root + '/file', root + '/link');
+    observed.push(fileSystem.lstatSync(root + '/link').isSymbolicLink());
+    observed.push(errorCode(() => fileSystem.symlinkSync('target', root + '/missing/link')));
+    const read = filename => new Promise(resolve => {
+      let output = '';
+      fileSystem.createReadStream(filename).on('data', chunk => { output += chunk; })
+        .on('end', () => resolve({ output })).on('error', error => resolve({ code: error.code }));
+    });
+    observed.push(await read(root + '/file'));
+    observed.push(await read(root + '/missing'));
+    const { Writable } = await import('node:stream');
+    observed.push(await new Promise((resolve, reject) => {
+      let output = '';
+      const dest = new Writable({ write(chunk, _encoding, next) { output += chunk; next(); } });
+      dest.on('finish', () => resolve(output)).on('error', reject);
+      fileSystem.createReadStream(root + '/file').on('error', reject).pipe(dest);
+    }));
+    fileSystem.unlinkSync(root + '/link');
+    observed.push(fileSystem.existsSync(root + '/link'));
+    return observed;
+  };
+  try {
+    const expected = await scenario(realFs, realFs.realpathSync(temporary));
+    liteFs.mock({ exclude: [EXCLUDED] });
+    try {
+      liteFs.mkdirSync('/mock/fs-extra', { recursive: true });
+      // 预期：同一输入得到相同的错误码、文件状态和流数据
+      assert.deepEqual(await scenario(liteFs, '/mock/fs-extra'), expected, '扩展文件操作应与真实 fs 一致');
+    } finally { liteFs.unmock(); }
+  } finally { realFs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+/** 场景：嵌套持久目录在复位后恢复父链，非持久目录不会保留。 */
+test('嵌套持久根：复位后恢复目录父链与文件内容', () => {
+  liteFs.markPersistent('/coverage-persistent/parent/data');
+  liteFs.mock({ exclude: [EXCLUDED] });
+  try {
+    // 输入：持久根的父目录原先不存在，写入后重建内存卷
+    liteFs.mkdirSync('/coverage-persistent/parent/data', { recursive: true });
+    liteFs.writeFileSync('/coverage-persistent/parent/data/value', 'retained');
+    liteFs.mkdirSync('/coverage-temporary');
+    liteFs.unmock();
+    liteFs.mock({ exclude: [EXCLUDED] });
+    // 预期：仅配置的子树恢复，父链由文件接口可访问
+    assert.equal(liteFs.readFileSync('/coverage-persistent/parent/data/value', 'utf8'), 'retained', '嵌套持久根内容应恢复');
+    assert.equal(liteFs.statSync('/coverage-persistent/parent').isDirectory(), true, '父目录链应恢复');
+    assert.equal(liteFs.existsSync('/coverage-temporary'), false, '非持久目录不应保留');
+  } finally { liteFs.unmock(); }
+});
+
+
+/** 场景：符号链接读取的字节、编码和错误结果与原生 fs 一致。 */
+test('真实 FS 对照：符号链接读取支持相对路径、链式链接、目录链接与循环报错', () => {
+  const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-fs-symlink-'));
+  const scenario = (fileSystem, root) => {
+    fileSystem.mkdirSync(root + '/folder');
+    fileSystem.writeFileSync(root + '/target', Buffer.from('target-content\0中文'));
+    fileSystem.writeFileSync(root + '/folder/value', 'nested-content');
+    // 输入：绝对、相对、多级链接，以及路径中间的目录链接
+    for (const [target, name] of [[root + '/target', 'absolute'], ['target', 'relative'],
+      ['relative', 'chain'], ['../chain', 'folder/up'], ['folder', 'directory'],
+      ['missing', 'dangling'], ['self', 'self'], ['cycle-b', 'cycle-a'], ['cycle-a', 'cycle-b']]) {
+      fileSystem.symlinkSync(target, root + '/' + name);
+    }
+    const read = (name, encoding) => {
+      try { return { value: fileSystem.readFileSync(root + '/' + name, encoding) }; }
+      catch (error) { return { code: error.code, syscall: error.syscall }; }
+    };
+    return [read('absolute'), read('relative', 'utf8'), read('chain', { encoding: 'hex' }),
+      read('folder/up', 'utf8'), read('directory/value', 'utf8'), read('dangling'), read('self'), read('cycle-a'),
+      read('directory'), read('target/child'), read('missing/child'), read('')];
+  };
+  try {
+    const expected = scenario(realFs, realFs.realpathSync(temporary));
+    liteFs.mock({ exclude: [EXCLUDED] });
+    try {
+      liteFs.mkdirSync('/mock/link-reference', { recursive: true });
+      // 预期：文件字节、编码、ENOENT/ELOOP/EISDIR/ENOTDIR 均与原生一致
+      assert.deepEqual(scenario(liteFs, '/mock/link-reference'), expected, '符号链接读取应与原生结果一致');
+    } finally { liteFs.unmock(); }
+  } finally { realFs.rmSync(temporary, { recursive: true, force: true }); }
+});

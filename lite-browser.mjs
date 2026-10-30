@@ -1,3 +1,4 @@
+// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；无前缀的接口允许所有调用方使用。
 // lite-browser：Playwright 无头页承载——进程级共享单例浏览器与页面。纯浏览器承载：不感知
 // 服务端口、不做请求拦截（旧 route 转发与观测账本已随真实 socket 前端迁入 lite-server——
 // 浏览器经真实 loopback socket 访问服务，故障/观测管线在进程内一处回灌），调用方自行
@@ -8,10 +9,11 @@
 // close() 关停并清空单例。
 import { chromium } from '@playwright/test';
 
-let shared = null; // 未启动 → null；启动后 { browser, context, page }
+let f_shared = null; // 未启动 → null；启动后 { browser, context, page }
 
+// 外部方法：启动或复用共享浏览器；允许所有调用方使用，包括测试文件。
 export async function open({ locale, permissions } = {}) {
-  if (shared) return shared;
+  if (f_shared) return f_shared;
   // --no-proxy-server：彻底绕过系统代理——开发机常驻本地代理（Clash 等）会把回环流量再转
   // 一道，挂起响应（wait 闸门）即堵死代理的上游连接，后续同源请求在代理处排队（实测闸门
   // 用例全程滞留浏览器侧）；测试流量全部回环，永不需要代理
@@ -24,25 +26,29 @@ export async function open({ locale, permissions } = {}) {
   const cdp = await context.newCDPSession(page);
   await cdp.send('Network.enable'); // Network 域命令需先启用才对 loader 生效
   await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
-  shared = { browser, context, page };
-  return shared;
+  f_shared = { browser, context, page };
+  return f_shared;
 }
 
-function instance() {
-  if (!shared) throw new Error('lite-browser.page 需先 open() 启动共享实例');
-  return shared;
+// 私有方法：取得已启动的浏览器实例；仅在本文件实现中使用，不导出。
+function f_instance() {
+  if (!f_shared) throw new Error('lite-browser.page 需先 open() 启动共享实例');
+  return f_shared;
 }
 
 // 共享页（进程级单例）；pageerror/console 等监听由用例侧自行挂接
-export function page() { return instance().page; }
+// 外部方法：取得共享页面；允许所有调用方使用，包括测试文件。
+export function page() { return f_instance().page; }
 
 // 共享浏览器上下文（弹层用例 waitForEvent('page') 等）
-export function context() { return instance().context; }
+// 外部方法：取得共享浏览器上下文；允许所有调用方使用，包括测试文件。
+export function context() { return f_instance().context; }
 
+// 外部方法：关闭共享浏览器；允许所有调用方使用，包括测试文件。
 export async function close() {
-  if (!shared) return;
-  const s = shared;
-  shared = null;
+  if (!f_shared) return;
+  const s = f_shared;
+  f_shared = null;
   await s.browser.close().catch(() => {});
 }
 

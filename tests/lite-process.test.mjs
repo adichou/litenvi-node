@@ -2,7 +2,7 @@
 // mock({ cwd?, argv?, env?, pid? }) 进假世界 / unmock 回原生透传；固定字段 execPath 取 node
 // 命令实现路径；chdir/exit/kill 转调命令实现（cd/exit/kill——lite-cmd-os，经 lite-cmd-mgr
 // 动态查询：cd 沿用目录校验、exit 沿用 ProcessExitError 语义、kill 最终到 lite-child_process
-// 的 signal 投递原语）；installArgv 子进程口径安装（原生 argv 同步替换 + unmock 恢复）。
+// 的 signal 投递原语）；命令上下文安装 argv（原生 argv 同步替换 + unmock 恢复）。
 // 命令注册与模拟执行已迁 lite-cmd-mgr（本门面无 register/runProcess 面）。用例注释格式：
 // 方法级写测试场景；语句中「输入」部分标记输入；断言按「预期 1/2/…」逐条注释。
 import { test } from 'node:test';
@@ -12,9 +12,11 @@ import os from 'node:os';
 import path from 'node:path';
 import liteFs from '../lite-fs.mjs';
 import liteChildProcess from '../lite-child_process.mjs';
+import mgr from '../lite-cmd-mgr.mjs';
 import { liteProcess, ProcessExitError } from '../lite-process.mjs';
-import { NODE_COMMAND_PATH } from '../lite-cmd-node.mjs';
 import '../lite-cmd-os.mjs'; // cd/exit/kill 命令实现（chdir/exit/kill 转调依赖）
+
+const NODE_COMMAND_PATH = '/mock-cmd/usr/local/bin/node';
 
 const selfFile = new URL(import.meta.url).pathname;
 const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));
@@ -72,8 +74,8 @@ test('真实 Process 对照：cwd/chdir、argv/env、字段、信号与退出码
       liteFs.writeFileSync('/mock/process-reference/file', 'x');
       // 虚拟信号表以自有命令 PID 登记，替换 proc.pid 后探测同一个活动命令
       const target = liteChildProcess.spawn('node', ['-e', 'setInterval(() => {}, 1000)']);
-      const world = liteProcess.mock({ cwd: '/mock/process-reference' });
-      world.pid = target.pid;
+      liteProcess.unmock();
+      liteProcess.mock({ cwd: '/mock/process-reference', argv: [NODE_COMMAND_PATH, 'reference.mjs', '--flag'], pid: target.pid });
       await new Promise(resolve => target.once('spawn', resolve));
       try {
         // 预期 1：目录变化、环境读写、字段与信号探测结果一致；pid/execPath 只核对对应语义
@@ -263,13 +265,16 @@ test('kill 透传：信号送达内存子进程、缺省 SIGTERM、无此进程 
   }
 });
 
-/** 场景：installArgv 子进程口径安装——门面视图与原生 process.argv 同步替换、unmock 恢复原值。 */
-test('installArgv：原生 argv 同步替换、门面同视图、unmock 恢复', () => {
+/** 场景：命令上下文安装 argv——门面视图与原生 process.argv 同步替换、unmock 恢复原值。 */
+test('命令上下文：argv 安装同步到门面与宿主，unmock 恢复', () => {
   const nativeArgv = process.argv;
   const done = setup();
   try {
     // 输入：假世界安装子进程口径 argv
-    liteProcess.installArgv([NODE_COMMAND_PATH, '/mock/project/entry.mjs', '--after']);
+    mgr.defineUserCommand('argv-installer', {
+      runSync(_args, ctx) { ctx.installArgv([NODE_COMMAND_PATH, '/mock/project/entry.mjs', '--after']); return { status: 0 }; },
+    });
+    assert.equal(liteChildProcess.spawnSync('argv-installer').status, 0, '命令上下文应能安装 argv');
     // 预期 1：门面视图为安装值
     assert.deepEqual(liteProcess.argv, [NODE_COMMAND_PATH, '/mock/project/entry.mjs', '--after'], '门面 argv 应为安装值');
     // 预期 2：原生 process.argv 同步替换（入口的主模块守卫读原生 argv）
@@ -280,10 +285,10 @@ test('installArgv：原生 argv 同步替换、门面同视图、unmock 恢复',
   // 输入：unmock 后
   // 预期 3：原生 argv 恢复安装前原值
   assert.equal(process.argv, nativeArgv, 'unmock 应恢复原生 argv');
-  // 输入：真实世界 installArgv（no-op 口径）
-  liteProcess.installArgv(['x']);
+  // 输入：真实世界检查私有安装能力不作为公共接口导出
+  assert.equal(liteProcess.installArgv, undefined, 'argv 安装方法只在文件内部使用');
   // 预期 4：真实世界安装为 no-op（真实进程 argv 不可伪造）
-  assert.equal(process.argv, nativeArgv, '真实世界 installArgv 应为 no-op');
+  assert.equal(process.argv, nativeArgv, '宿主 argv 应保持恢复后的原值');
 });
 
 /** 场景：命令寻址口径——chdir/exit 转调走配置寻址（命令在即语义在），不依赖卷内系统卷文件。 */

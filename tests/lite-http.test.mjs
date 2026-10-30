@@ -243,3 +243,64 @@ test('幂等与恢复：重复 mock 保留规则、unmock 回真实实现', asyn
   // 预期 2：回到真实 node:http connect 语义
   assert.equal(refused.code, 'ECONNREFUSED', 'unmock 后应回到真实 node:http connect 语义');
 });
+
+/** URL 注入请求夹具：公开 request 接口，超时销毁请求以保证失败用例能收尾。 */
+export function _urlInjectionRequest(client, options) {
+  return new Promise((resolve, reject) => {
+    const req = client.request(options, res => {
+      let body = '';
+      res.on('data', chunk => { body += chunk; });
+      res.on('end', () => { clearTimeout(deadline); resolve({ status: res.statusCode, body }); });
+      res.on('error', error => { clearTimeout(deadline); reject(error); });
+    });
+    const deadline = setTimeout(() => req.destroy(new Error('URL 注入请求超时')), 2000);
+    req.on('error', error => { clearTimeout(deadline); reject(error); });
+    req.end();
+  });
+}
+
+/** 场景：URL 定向传输故障，来源、端口、完整查询串与方法分别隔离，未命中不消耗 once。 */
+test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离', async () => {
+  liteHttp.mock();
+  liteServer.mock();
+  let handled = 0;
+  const server = liteServer.createServer((req, res) => { handled++; res.end('handler'); }).listen(0);
+  await new Promise(resolve => server.once('listening', resolve));
+  try {
+    const base = `http://localhost:${server.port}`;
+    const send = (path, extra = {}) => _urlInjectionRequest(liteHttp, { hostname: 'localhost', port: server.port, path, ...extra });
+    // 输入：规范化主机名和 fragment 的绝对 URL，同时限定 POST、旧 path/query 条件与 once
+    liteHttp.inject({ url: new URL(`${base.toUpperCase()}/same?a=1&b=2#ignored`), method: 'POST', path: '/same', query: { a: 1 }, status: 503, once: true });
+    const misses = [
+      await send('/same?a=1&b=2'),
+      await send('/same?b=2&a=1', { method: 'POST' }),
+      await send('/same?a=1&b=2&c=3', { method: 'POST' }),
+      await send('/same?a=1&b=2', { method: 'POST', hostname: '127.0.0.1' }),
+      await send('/same?a=1&b=2', { method: 'POST', headers: { Host: `localhost:${server.port + 1}` } }),
+    ];
+    // 预期 1：同路径的其他方法、查询串、主机和端口均应到达真实 handler
+    assert.deepEqual(misses.map(out => out.status), [200, 200, 200, 200, 200], '不同 URL 或方法不能命中或消耗 once');
+    // 预期 2：完整匹配后才消耗 once，传输层命中不执行 handler
+    assert.equal((await send('/same?a=1&b=2', { method: 'POST' })).status, 503, '精确 URL 和 POST 应命中');
+    assert.equal(handled, 5, '传输故障应在 handler 前拦截');
+    assert.equal((await send('/same?a=1&b=2', { method: 'POST' })).status, 200, 'once 后应恢复 handler');
+    // 输入：路径 URL 跨来源生效，重复参数与顺序保留；删除后恢复真实响应
+    const remove = liteHttp.inject({ url: '/same?x=1&x=2#ignored', status: 502 });
+    // 预期 3：路径规则不限定来源，但严格比较完整查询串
+    assert.equal((await send('/same?x=1&x=2', { hostname: 'other.test' })).status, 502, '路径 URL 应跨来源命中');
+    assert.equal((await send('/same?x=2&x=1')).status, 200, '重复查询参数顺序不同不能命中');
+    assert.equal((await send('/same?x=1&x=2', { method: 'POST' })).status, 502, '未限定 method 时各方法均可命中 URL');
+    remove(); remove();
+    assert.equal((await send('/same?x=1&x=2')).status, 200, '移除 URL 规则应幂等恢复');
+    // 输入：省略默认端口的 URL 规则，使用显式 80 端口与 fragment 的 URL 请求
+    liteHttp.inject({ url: 'http://EXAMPLE.test/default', status: 504 });
+    // 预期 4：默认端口和主机名规范化，fragment 不参与匹配
+    assert.equal((await _urlInjectionRequest(liteHttp, new URL('http://example.test:80/default#ignored'))).status, 504, '默认端口、主机大小写和 fragment 应规范化');
+    liteHttp.inject({ url: new URL('https://example.test/default'), status: 504 });
+    assert.equal((await _urlInjectionRequest(liteHttp, new URL('https://example.test:443/default'))).status, 504, 'HTTPS URL 对象应使用默认 443 端口匹配');
+    assert.equal((await _urlInjectionRequest(liteHttp, 'https://example.test/default')).status, 504, 'HTTPS 字符串应与 URL 对象保持一致');
+    // 预期 5：非法 URL 在登记时拒绝，不留给请求阶段报错
+    for (const url of ['', 'relative', '//example.test/same', 'ftp://example.test/same', 1, {}])
+      assert.throws(() => liteHttp.inject({ url, status: 503 }), /url/, '非法 URL 应在注入时拒绝');
+  } finally { liteHttp.unmock(); liteServer.unmock(); }
+});

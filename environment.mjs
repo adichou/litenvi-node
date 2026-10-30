@@ -8,6 +8,7 @@ import realFs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import vm from 'node:vm';
+import os from 'node:os';
 // fork 在本文件顶层静态导入：宿主 / 业务子进程 / 原生虚拟子进程都先加载本模块再安装模块替身，
 // 拿到的始终是真实 fork（业务代码看到的 node:child_process 由 mock.module 替换，不受影响）。
 import { fork } from 'node:child_process';
@@ -71,7 +72,7 @@ export function createElement(tag = 'div') {
         getAttribute(name) { return attributes.has(String(name)) ? attributes.get(String(name)) : null; },
     };
 }
-export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, initialData, failWrite, now = '2026-10-08T04:00:00.000Z', sideEntries, initialStorage = {}, loadModules, onHttpSettle, onHttpObserve,
+export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, initialData, failWrite, now = '2026-10-08T04:00:00.000Z', sideEntries, initialStorage = {}, loadModules, onHttpSettle, onHttpObserve, packageAllowlist,
     // 原生虚拟 Node 子进程（runChildWorld）所需的世界参数化项——默认值保持既有语义不变：
     // serve=false 跳过「主入口必须启动 HTTP 服务」等待（CLI 入口不监听）；processOverrides
     // 覆写 process 替身的 argv/stdout/stderr/exit 等（子进程口径）；initialGit 以父世界快照
@@ -568,7 +569,7 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         randomBytes: (size) => Buffer.alloc(size, ++randomSequence % 256),
         randomUUID: () => `00000000-0000-4000-8000-${String(++randomSequence).padStart(12, '0')}`,
     };
-    const osMock = { homedir: () => '/mock/home', tmpdir: () => '/mock/tmp', platform: () => 'darwin', arch: () => 'arm64' };
+    const osMock = { homedir: () => '/mock/home', tmpdir: () => '/mock/tmp', platform: () => 'darwin', arch: () => 'arm64', constants: os.constants, EOL: os.EOL, userInfo: os.userInfo, cpus: os.cpus, totalmem: os.totalmem, freemem: os.freemem, hostname: os.hostname, networkInterfaces: os.networkInterfaces, loadavg: os.loadavg, uptime: os.uptime, type: os.type, release: os.release };
     // localStorage / sessionStorage 替身：前端代码的两条键值存储通道（内存实现，随环境销毁，
     // 不跨环境共享；两通道为独立实例互不串扰——对应浏览器两个独立存储区）。注入 VM 全局供
     // action 直连读写；返回面暴露只读视图（getItem / key / length）供用例断言——写通道仅
@@ -643,9 +644,38 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
             modules.set(identifier, module);
             return module;
         }
+        // 裸包依赖（packageAllowlist 前缀）不经 URL 相对解析——join 到 srcRoot 下必 ENOENT
+        loadModule.specifierOf = (specifier, parentIdentifier) => specifier.startsWith('node:')
+            || (packageAllowlist?.some((prefix) => specifier.startsWith(prefix)) && !specifier.startsWith('.') && !specifier.startsWith('/'))
+            ? specifier : new URL(specifier, parentIdentifier).href;
+        if (packageAllowlist?.some((prefix) => identifier.startsWith(prefix)) && !identifier.startsWith('file:') && !identifier.startsWith('/')) {
+            // 裸包依赖（lite 门面）：真实 import 为替身模块（门面默认透传，行为与生产一致）
+            const values = await import(identifier);
+            const exports = { ...values, default: values.default || values };
+            const module = new vm.SyntheticModule(Object.keys(exports), function () {
+                for (const [name, value] of Object.entries(exports))
+                    this.setExport(name, value);
+            }, { context, identifier });
+            modules.set(identifier, module);
+            return module;
+        }
         const filename = fileURLToPath(identifier);
-        if (!filename.startsWith(`${srcRootDir}${path.sep}`))
+        if (!filename.startsWith(`${srcRootDir}${path.sep}`)) {
+            // srcRoot 外的裸包依赖（如 'litenvi-node/lite-fs.mjs'——生产入口以 npm 依赖引用
+            // lite 门面）：经真实 import 加载为替身模块（门面自身默认透传，行为与生产一致；
+            // 测试世界经模块替身持有同一实例，mock 状态互通）。仅放行显式登记的包前缀。
+            if (packageAllowlist?.some((prefix) => identifier.startsWith(prefix))) {
+                const values = await import(identifier);
+                const exports = { ...values, default: values.default || values };
+                const module = new vm.SyntheticModule(Object.keys(exports), function () {
+                    for (const [name, value] of Object.entries(exports))
+                        this.setExport(name, value);
+                }, { context, identifier });
+                modules.set(identifier, module);
+                return module;
+            }
             return deny('srcRoot 目录外模块')(filename);
+        }
         // 真实文件读取仅用于测试执行器加载源码，业务 fs 已完全替换为内存文件系统。
         const module = new vm.SourceTextModule(realFs.readFileSync(filename, 'utf8'), {
             context, identifier,
@@ -653,9 +683,9 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
             // 主入口 top-level await import()（如 CLI 顶层 await import('node:http')）与静态
             // import 同一加载边界：动态导入也经 loadModule 走模块替身（与子进程加载器同构）。
             importModuleDynamically: async (specifier, parent) => {
-                const target = await loadModule(specifier.startsWith('node:') ? specifier : new URL(specifier, parent.identifier).href);
+                const target = await loadModule(loadModule.specifierOf(specifier, parent.identifier));
                 if (target.status === 'unlinked')
-                    await target.link((name, ref) => loadModule(name.startsWith('node:') ? name : new URL(name, ref.identifier).href));
+                    await target.link((name, ref) => loadModule(loadModule.specifierOf(name, ref.identifier)));
                 if (target.status === 'linked')
                     await target.evaluate();
                 return target;
@@ -714,7 +744,9 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
         proc.on('exit', finish);
         proc.send({ srcRoot: fileURLToPath(pathToFileURL(args[0])), projectRoot,
             env: { ...processMock.env, ...options?.env }, now: new Date(clock.now).toISOString(),
-            files: forkState.files, git: forkState.git, args, cwd: options?.cwd, stdin: options?.stdin });
+            files: forkState.files, git: forkState.git, args, cwd: options?.cwd, stdin: options?.stdin,
+            // 裸包放行前缀随 fork 传递：子世界入口（如 atb.mjs）import lite 门面需同一白名单
+            packageAllowlist });
         return child;
     }
 
@@ -741,6 +773,9 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
                 exit: status => { throw Object.assign(new Error('虚拟子进程退出'), { childExit: status ?? 0 }); } };
             const childContext = vm.createContext({ ...context, process: childProcessMock, console: { log: (...values) => childProcessMock.stdout.write(values.join(' ') + '\n'), error: (...values) => childProcessMock.stderr.write(values.join(' ') + '\n'), warn: (...values) => childProcessMock.stderr.write(values.join(' ') + '\n') } });
             const cache = new Map();
+            load.specifierOf = (specifier, parentIdentifier) => specifier.startsWith('node:')
+                || (packageAllowlist?.some((prefix) => specifier.startsWith(prefix)) && !specifier.startsWith('.') && !specifier.startsWith('/'))
+                ? specifier : new URL(specifier, parentIdentifier).href;
             async function load(identifier) {
                 if (cache.has(identifier))
                     return cache.get(identifier);
@@ -753,10 +788,18 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
                 }
                 else {
                     const file = fileURLToPath(identifier);
+                    if (packageAllowlist?.some((prefix) => identifier.startsWith(prefix))) {
+                        // 裸包依赖（lite 门面）：真实 import 为替身模块（门面默认透传，行为与生产一致）
+                        const values = await import(identifier);
+                        const exports = { ...values, default: values.default || values };
+                        module = new vm.SyntheticModule(Object.keys(exports), function () { for (const [name, value] of Object.entries(exports))
+                            this.setExport(name, value); }, { context: childContext, identifier });
+                        return module;
+                    }
                     if (!file.startsWith(srcRootDir + path.sep))
                         return deny('子进程源码边界外入口')(file);
-                    module = new vm.SourceTextModule(realFs.readFileSync(file, 'utf8'), { context: childContext, identifier, initializeImportMeta: meta => { meta.url = identifier; }, importModuleDynamically: async (specifier, parent) => { const module = await load(specifier.startsWith('node:') ? specifier : new URL(specifier, parent.identifier).href); if (module.status === 'unlinked')
-                            await module.link((name, ref) => load(name.startsWith('node:') ? name : new URL(name, ref.identifier).href)); if (module.status === 'linked')
+                    module = new vm.SourceTextModule(realFs.readFileSync(file, 'utf8'), { context: childContext, identifier, initializeImportMeta: meta => { meta.url = identifier; }, importModuleDynamically: async (specifier, parent) => { const module = await load(load.specifierOf(specifier, parent.identifier)); if (module.status === 'unlinked')
+                            await module.link((name, ref) => load(load.specifierOf(name, ref.identifier))); if (module.status === 'linked')
                             await module.evaluate(); return module; } });
                 }
                 cache.set(identifier, module);
@@ -764,7 +807,7 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
             }
             try {
                 const entry = await load(pathToFileURL(args[0]).href);
-                await entry.link((specifier, parent) => load(specifier.startsWith('node:') ? specifier : new URL(specifier, parent.identifier).href));
+                await entry.link((specifier, parent) => load(load.specifierOf(specifier, parent.identifier)));
                 await entry.evaluate();
                 code = childProcessMock.exitCode || 0;
             }
@@ -808,16 +851,14 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
             sideEntriesFace = Object.freeze(loaded.exports);
         } else {
             const entry = await loadModule(pathToFileURL(srcRoot).href);
-            await entry.link((specifier, parent) => loadModule(specifier.startsWith('node:')
-                ? specifier : new URL(specifier, parent.identifier).href));
+            await entry.link((specifier, parent) => loadModule(loadModule.specifierOf(specifier, parent.identifier)));
             await entry.evaluate();
             // 附加源码入口与主入口使用同一加载边界和依赖图。
             const exports = { entry: entry.namespace };
             for (const item of sideEntries || []) {
                 const module = await loadModule(pathToFileURL(item.file).href);
                 if (module.status === 'unlinked')
-                    await module.link((specifier, parent) => loadModule(specifier.startsWith('node:')
-                        ? specifier : new URL(specifier, parent.identifier).href));
+                    await module.link((specifier, parent) => loadModule(loadModule.specifierOf(specifier, parent.identifier)));
                 if (module.status === 'linked')
                     await module.evaluate();
                 exports[item.key] = module.namespace;
@@ -872,7 +913,7 @@ export async function buildMockEnvironment({ srcRoot, projectRoot, env = {}, ini
 // 与 VM 口径对齐——独立 argv / stdout / stderr / exit 语义，真实入口源码在全新模块缓存中
 // 执行，fs / Git 世界经快照进出。本函数不 dispose：CLI 世界随进程退出消亡（VM 子进程同
 // 样无收口断言）；入口失败或 process.exit 哨兵都折算为退出码，最终状态经结果对象回流。
-export async function runChildWorld({ srcRoot, projectRoot, env, now, files, git, args, cwd, stdin, onStream }) {
+export async function runChildWorld({ srcRoot, projectRoot, env, now, files, git, args, cwd, stdin, onStream, packageAllowlist }) {
     const capture = {};
     const stream = (channel, text) => onStream(channel, String(text));
     const exitSentinel = Object.assign(new Error('虚拟子进程退出'), { childExit: null });
@@ -889,7 +930,7 @@ export async function runChildWorld({ srcRoot, projectRoot, env, now, files, git
     let exitCode = 0, runError = null;
     try {
         await buildMockEnvironment({ srcRoot, projectRoot, env, now, serve: false,
-            loadModules: loadNativeModules, processOverrides, initialGit: git, stdin, capture, preserveOnDispose: true,
+            loadModules: (options) => loadNativeModules({ ...options, packageAllowlist }), processOverrides, initialGit: git, stdin, capture, preserveOnDispose: true,
             initialData(filesystem) {
                 filesystem.__vol.fromJSON(files);
                 volumeRef = filesystem.__vol;

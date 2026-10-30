@@ -494,3 +494,19 @@ test('exit 命令：spawnSync 转子进程退出码、spawn 按码收场、退�
     done();
   }
 });
+
+
+/** 场景：kill 支持直接用信号名作为选项，实际信号与退出状态一致。 */
+test('kill 信号名选项：-TERM 投递 SIGTERM 并移除活动 PID', async () => {
+  const done = setup();
+  try {
+    // 输入：启动活动命令，再通过公共 spawnSync 调用 kill -TERM
+    const child = liteChildProcess.spawn('node', ['-e', 'setInterval(() => {}, 1000)']);
+    const closed = liteChildProcess.waitForClose(child);
+    const sent = liteChildProcess.spawnSync('kill', ['-TERM', String(child.pid)], { encoding: 'utf8' });
+    // 预期：信号送达，终态为 SIGTERM，后续 PID 探测失败
+    assert.equal(sent.status, 0, '信号名选项应成功投递');
+    assert.deepEqual(await closed, { code: null, signal: 'SIGTERM' }, '退出信号应为 SIGTERM');
+    assert.equal(liteChildProcess.spawnSync('kill', ['-0', String(child.pid)]).status, 1, '退出后的 PID 不应继续存在');
+  } finally { done(); }
+});
