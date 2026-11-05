@@ -74,7 +74,9 @@ try {
 
 浏览器默认无头。`open({ headless: false })` 显式启用有头模式，供特定排查场景在调用处按需开启（模式只由显式参数决定，不提供全局开关）。单例在既有实例上收到异模式请求时关停重建（控制台告警提示），同模式保持幂等复用；实例对象携带生效模式（`shared.headless`）。
 
-浏览器超时信号由 `lite-browser-timer.mjs` 提供显式门面：业务导入 `AbortSignal` 或使用默认对象的 `AbortSignal`；默认透传原生超时、abort/any 与原型，页面全局不被替换。`t_mock()`（或 `{ mode: 'gate' }`）挂起之后经门面创建的 timeout 信号，`t_triggerSignalTimeout()` 以原生 `TimeoutError` 触发当前批次；`t_unmock()` 以 `AbortError` 清理仍挂起的信号并恢复默认行为。缓存过的门面 timeout 函数同样跟随开关。浏览器应通过正常 ESM URL/import map 加载同一个模块；测试控制也必须在该页面内导入同一个 URL，Node 端状态不会跨进程传入页面。页面导航自然创建新实例，不使用 addInitScript 或 AbortSignal 全局改写。旧的浏览器信号控制入口已移除。
+浏览器超时信号由 `lite-browser-timer.mjs` 提供显式门面：业务导入 `AbortSignal` 或使用默认对象的 `AbortSignal`；默认透传原生超时、abort/any 与原型，页面全局不被替换。`t_mock()`（或 `{ mode: 'gate' }`）统一启用信号和周期 Mock，挂起之后经门面创建的 timeout 信号，`t_fireSingalTimeout()` 以原生 `TimeoutError` 触发当前批次；`t_unmock()` 以 `AbortError` 清理仍挂起的信号并恢复默认行为。缓存过的门面 timeout 函数同样跟随开关。浏览器应通过正常 ESM URL/import map 加载同一个模块；测试控制也必须在该页面内导入同一个 URL，Node 端状态不会跨进程传入页面。页面导航自然创建新实例，不使用 addInitScript 或 AbortSignal 全局改写。旧的浏览器信号控制入口已移除。
+
+周期定时通过同一模块的 `setInterval/clearInterval` 门面控制。默认返回原生句柄；`t_mock()` 同时启用周期 gate，清除门面已登记的原生周期并保留回调，后续周期注册也挂起。`await t_tickIntervals()` 手动推进当前周期一轮并等待全部异步回调完成，保留参数和浏览器全局接收者；某个回调失败时，待本轮全部结束后向测试传播错误。已清除周期不执行，回调中新建周期留给下一轮。不支持 `signals`、`intervals` 选择性参数，传入这些旧参数会报错。gate 支持函数回调；`t_unmock()` 丢弃挂起周期，之后的新调用恢复原生，不自动重启旧周期。页面导航会获得新模块实例，测试须在新页面重新启用 gate；不依赖全局标记或自动启用。
 
 ```js
 import timer, { AbortSignal } from 'litenvi-node/lite-browser-timer.mjs';
@@ -85,7 +87,7 @@ const signal = AbortSignal.timeout(5000);
 // 测试：在页面内控制同一模块实例。
 timer.t_mock();
 const pending = timer.AbortSignal.timeout(5000);
-timer.t_triggerSignalTimeout();
+timer.t_fireSingalTimeout();
 timer.t_unmock();
 ```
 
@@ -106,7 +108,7 @@ try {
 
 `litenvi-node/lite-timer.mjs` 是 Node 侧定时器与时钟替身门面，面向「按模块遮蔽注入」的用法：测试装配（`node:module` register hook）向被测模块源码头部注入 `import { setTimeout, clearTimeout, setInterval, clearInterval, Date } from 'litenvi-node/lite-timer.mjs'`，ESM import 绑定遮蔽全局，仅被注入模块的定时器与 Date 运行在虚拟时钟上，宿主进程不受影响。未 mock 时五个绑定原样转发原生实现，生产行为不变。
 
-`t_mock({ now? })` 从给定纪元（数值毫秒或可解析时间字符串，缺省当前真实时刻）进入冻结世界：定时器只在 `t_advanceMs(ms)` 推进时到期派发（tickAsync 口径，回调间微任务沉淀），`Date.now()` / `new Date()` / `Date()` 返回虚拟当前时刻，`new Date(x)` 与 `parse`/`UTC` 等静态面透传原生。重复 `t_mock` 幂等保留既有纪元与在途定时器；`t_unmock()` 丢弃时钟与未触发定时器并恢复原生。`now()` 返回当前（虚拟或真实）时刻。时钟本体复用 `@sinonjs/fake-timers` 的 `createClock`（不 `install`，不触碰宿主全局）。`process.hrtime`、`performance`、`queueMicrotask` 与真实 I/O 到达时刻不经本门面。与 `lite-browser-timer` 的分工：那是页面端 `AbortSignal.timeout` 的 gate 门面，本模块面向 Node 侧普通定时器，两端互不感知。
+`t_mock({ now? })` 从给定纪元（数值毫秒或可解析时间字符串，缺省当前真实时刻）进入冻结世界：定时器只在 `t_advanceMs(ms)` 推进时到期派发（tickAsync 口径，回调间微任务沉淀），`Date.now()` / `new Date()` / `Date()` 返回虚拟当前时刻，`new Date(x)` 与 `parse`/`UTC` 等静态面透传原生。重复 `t_mock` 幂等保留既有纪元与在途定时器；`t_unmock()` 丢弃时钟与未触发定时器并恢复原生。`now()` 返回当前（虚拟或真实）时刻。时钟本体复用 `@sinonjs/fake-timers` 的 `createClock`（不 `install`，不触碰宿主全局）。`process.hrtime`、`performance`、`queueMicrotask` 与真实 I/O 到达时刻不经本门面。与 `lite-browser-timer` 的分工：那是页面端超时信号与周期定时的 gate 门面，本模块面向 Node 侧普通定时器，两端互不感知。
 
 ```js
 // 测试装配：向被测模块注入遮蔽绑定（示意）。
@@ -129,7 +131,7 @@ timer.t_unmock();
 - `t_`：测试专用，只允许测试代码及其夹具引用或调用；生产代码不得导入、读取、转存或调用。
 - 无前缀：公共运行接口，生产代码与测试均可使用。
 
-测试专用接口包括 `t_mock/t_unmock/t_inject`、子进程的 `t_calls/t_reset`、服务端的 `t_port/t_requests/t_resetRequests`、进程的 `t_exitCodes`、Node 时钟的 `t_advanceMs`、浏览器时钟的 `t_triggerSignalTimeout`、命令管理器的 `t_defineUserCommand/t_defined`，以及命令句柄的 `t_inject/t_onRun`。不保留旧的无前缀别名；时钟具名导出也使用新名称。原生 API 和请求/响应数据字段保持原名。
+测试专用接口包括 `t_mock/t_unmock/t_inject`、子进程的 `t_calls/t_reset`、服务端的 `t_port/t_requests/t_resetRequests`、进程的 `t_exitCodes`、Node 时钟的 `t_advanceMs`、浏览器时钟的 `t_fireSingalTimeout/t_tickIntervals`、命令管理器的 `t_defineUserCommand/t_defined`，以及命令句柄的 `t_inject/t_onRun`。不保留旧的无前缀别名；时钟具名导出也使用新名称。原生 API 和请求/响应数据字段保持原名。
 
 当前通过命名和方法注释表达访问约定，暂未增加 ESLint 或运行时访问限制。
 

@@ -11,7 +11,8 @@
     "*.cjs"
   ],
   "scripts": {
-    "test": "node tests/run-all.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "test:coverage": "node --test --experimental-test-coverage tests/*.test.mjs"
   },
   "license": "MIT",
   "dependencies": {

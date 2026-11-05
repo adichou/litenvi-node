@@ -71,19 +71,19 @@ test('gate 生命周期：幂等、缓存入口、分批触发、清理与恢复
     const triggered = await page.evaluate(() => {
       const { timer } = window.timerFixture;
       window.gateProbe.a.addEventListener('abort', () => { window.gateProbe.next = timer.AbortSignal.timeout(1); });
-      timer.t_triggerSignalTimeout();
+      timer.t_fireSingalTimeout();
       const result = [window.gateProbe.a.reason.name, window.gateProbe.b.reason.name,
         window.gateProbe.a.reason instanceof DOMException, window.gateProbe.next.aborted];
-      timer.t_triggerSignalTimeout();
+      timer.t_fireSingalTimeout();
       result.push(window.gateProbe.next.reason.name);
-      timer.t_triggerSignalTimeout();
+      timer.t_fireSingalTimeout();
       return result;
     });
     assert.deepEqual(triggered, ['TimeoutError', 'TimeoutError', true, false, 'TimeoutError'], '触发应使用原生错误，回调中新建信号留给下一次触发');
     const restored = await page.evaluate(async () => {
       const { timer } = window.timerFixture;
       const pending = timer.AbortSignal.timeout(60_000);
-      timer.t_unmock(); timer.t_unmock(); timer.t_triggerSignalTimeout();
+      timer.t_unmock(); timer.t_unmock(); timer.t_fireSingalTimeout();
       const signal = timer.AbortSignal.timeout(5);
       const reason = await new Promise(resolve => signal.addEventListener('abort', () => resolve(signal.reason.name)));
       return [pending.reason.name, reason, window.nativeTimeout === AbortSignal.timeout];
@@ -109,7 +109,7 @@ test('真实请求：超时中止 fetch，撤销后正常返回', async () => {
         );
       });
       await sent;
-      await page.evaluate(() => window.timerFixture.timer.t_triggerSignalTimeout());
+      await page.evaluate(() => window.timerFixture.timer.t_fireSingalTimeout());
       await page.waitForFunction(() => window.fetchProbe.state !== 'pending');
       assert.deepEqual(await page.evaluate(() => window.fetchProbe), { state: 'failed', name: 'TimeoutError' }, '真实 fetch 应识别门面信号并报告超时');
       release(); remove();
@@ -164,7 +164,7 @@ test('上下文隔离：Node 门面控制不改原生对象，也不影响浏览
   const native = globalThis.AbortSignal;
   const nativeTimeout = native.timeout;
   const cached = timer.AbortSignal.timeout;
-  timer.t_triggerSignalTimeout(); timer.t_unmock();
+  timer.t_fireSingalTimeout(); timer.t_unmock();
   for (const options of [null, false, [], { mode: 'scale' }]) {
     assert.throws(() => timer.t_mock(options), TypeError, '非法 mock 参数应拒绝');
   }
@@ -178,7 +178,7 @@ test('上下文隔离：Node 门面控制不改原生对象，也不影响浏览
     const abort = timer.AbortSignal.abort('manual');
     assert.equal(timer.AbortSignal.any([abort]).reason, 'manual', '非 timeout 静态 API 仍应原生透传');
     assert.equal(pending instanceof timer.AbortSignal, true, '门面应保留原生原型');
-    timer.t_triggerSignalTimeout();
+    timer.t_fireSingalTimeout();
     assert.equal(pending.reason.name, 'TimeoutError', 'Node gate 也应产生原生超时原因');
     await withTimerPage(async page => {
       assert.equal(await page.evaluate(() => new Promise(resolve => {
@@ -195,4 +195,98 @@ test('上下文隔离：Node 门面控制不改原生对象，也不影响浏览
     assert.equal(globalThis.AbortSignal, native, '原生全局类不应改写');
     assert.equal(native.timeout, nativeTimeout, '原生静态方法不应改写');
   } finally { timer.t_unmock(); }
+});
+
+/** 场景：周期门面默认透传原生，启用 gate 后接管已注册定时器，推进等待异步回调且不改全局。 */
+test('interval gate：接管已有定时器、手动推进和异步完成', async () => {
+  await withTimerPage(async page => {
+    const initial = await page.evaluate(async () => {
+      const { timer } = window.timerFixture;
+      window.intervalProbe = { ticks: 0, args: null };
+      const nativeInterval = globalThis.setInterval;
+      window.intervalProbe.id = timer.setInterval(async function(value) {
+        await Promise.resolve();
+        window.intervalProbe.ticks++;
+        window.intervalProbe.args = value;
+        window.intervalProbe.receiver = this === globalThis;
+      }, 1, 'payload');
+      timer.t_mock();
+      const same = timer.t_mock() === timer;
+      window.intervalProbe.signal = timer.AbortSignal.timeout(1);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return { ticks: window.intervalProbe.ticks, same, native: nativeInterval === globalThis.setInterval, signalAborted: window.intervalProbe.signal.aborted };
+    });
+    assert.deepEqual(initial, { ticks: 0, same: true, native: true, signalAborted: false }, '一次 Mock 应同时冻结已有周期与新超时信号，并保留浏览器全局定时器');
+    assert.deepEqual(await page.evaluate(async () => {
+      const { timer } = window.timerFixture;
+      await timer.t_tickIntervals();
+      return [window.intervalProbe.ticks, window.intervalProbe.args, window.intervalProbe.receiver];
+    }), [1, 'payload', true], '推进一轮应等待异步回调完成，并保留原始参数和浏览器回调接收者');
+    assert.deepEqual(await page.evaluate(async () => {
+      const { timer } = window.timerFixture;
+      timer.clearInterval(window.intervalProbe.id);
+      timer.clearInterval(window.intervalProbe.id);
+      await timer.t_tickIntervals();
+      timer.t_fireSingalTimeout();
+      return [window.intervalProbe.ticks, window.intervalProbe.signal.reason.name];
+    }), [1, 'TimeoutError'], '清除周期后不再执行回调，超时信号仍由独立的手动触发步骤控制');
+  });
+});
+
+/** 场景：周期 gate 中新增、清除和卸载的生命周期；回调中新建的周期留到下一步。 */
+test('interval gate：分步新增、清除、卸载与原生恢复', async () => {
+  await withTimerPage(async page => {
+    assert.deepEqual(await page.evaluate(async () => {
+      const { timer } = window.timerFixture;
+      timer.t_mock();
+      const ticks = [];
+      let late, cancelled;
+      const first = timer.setInterval(() => {
+        ticks.push('first');
+        timer.clearInterval(first);
+        timer.clearInterval(cancelled);
+        late = timer.setInterval(() => ticks.push('late'), 2000);
+      }, 2000);
+      cancelled = timer.setInterval(() => ticks.push('cancelled'), 2000);
+      await timer.t_tickIntervals();
+      const stepOne = [...ticks];
+      await timer.t_tickIntervals();
+      timer.clearInterval(late);
+      timer.setInterval(() => ticks.push('discarded'), 2000);
+      timer.t_unmock();
+      timer.t_unmock();
+      let error;
+      try { await timer.t_tickIntervals(); } catch (failure) { error = failure.message; }
+      const native = await new Promise(resolve => {
+        const id = timer.setInterval(() => { timer.clearInterval(id); resolve('native'); }, 1);
+      });
+      return { stepOne, ticks, native, rejected: /需要.*t_mock/.test(error) };
+    }), { stepOne: ['first'], ticks: ['first', 'late'], native: 'native', rejected: true }, '逐步推进应处理增删生命周期，卸载丢弃 gate 并恢复之后的原生周期');
+  });
+});
+
+/** 场景：周期回调异常必须反馈给测试，参数错误必须明确拒绝。 */
+test('interval gate：拒绝非法参数并传播回调错误', async () => {
+  for (const options of [{ signals: true }, { signals: false }, { intervals: true }, { intervals: false }]) {
+    assert.throws(() => timer.t_mock(options), TypeError, '旧的选择性 Mock 选项必须明确拒绝');
+  }
+  await withTimerPage(async page => {
+    const errors = await page.evaluate(async () => {
+      const { timer } = window.timerFixture;
+      timer.t_mock();
+      let callback, step;
+      try { timer.setInterval(null, 1); } catch (failure) { callback = failure.name; }
+      const id = timer.setInterval(() => { throw new Error('interval failure'); }, 1);
+      let completed = false;
+      const other = timer.setInterval(async () => {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        completed = true;
+      }, 1);
+      try { await timer.t_tickIntervals(); } catch (failure) { step = failure.message; }
+      timer.clearInterval(id);
+      timer.clearInterval(other);
+      return { callback, step, completed };
+    });
+    assert.deepEqual(errors, { callback: 'TypeError', step: 'interval failure', completed: true }, '非法回调和执行错误应反馈给测试，不得静默吞掉');
+  });
 });
