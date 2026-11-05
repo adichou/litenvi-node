@@ -1,7 +1,7 @@
 {
   "name": "litenvi-node",
   "version": "0.1.0",
-  "description": "跨项目 Node 测试假环境：独立 VM 加载完整生产源码，替身只落在环境边界——memfs 内存文件系统、FakeTimers 冻结时钟、确定性随机序列、内存 Git 沙盒、假 HTTP 传输层。",
+  "description": "可切换的 Node 与浏览器环境门面：文件系统、进程、Git、HTTP、时钟和 Playwright，测试通过 lite-* 组件装配内存环境。",
   "type": "module",
   "exports": {
     "./*": "./*"
@@ -11,13 +11,13 @@
     "*.cjs"
   ],
   "scripts": {
-    "test": "node --experimental-vm-modules tests/run-all.mjs"
+    "test": "node tests/run-all.mjs"
   },
   "license": "MIT",
   "dependencies": {
     "@sinonjs/fake-timers": "15.4.0",
-    "memfs": "4.80.0",
-    "shell-quote": "1.12.0"
+    "shell-quote": "1.12.0",
+    "playwright": "^1.64.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1"

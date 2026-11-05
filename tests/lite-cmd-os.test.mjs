@@ -19,12 +19,12 @@ const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));
 
 // 逐用例装配：内存卷（排除本测试目录）+ spawn 边界 + 工作目录骨架
 function setup() {
-  liteFs.mock({ exclude: [EXCLUDED] });
+  liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/mock/project', { recursive: true });
-  liteChildProcess.mock();
+  liteChildProcess.t_mock();
   return () => {
-    liteChildProcess.unmock();
-    liteFs.unmock();
+    liteChildProcess.t_unmock();
+    liteFs.t_unmock();
   };
 }
 
@@ -193,7 +193,7 @@ test('真实 OS 对照：kill 探测、信号终止、失效 PID 与 exit 退出
 /** 场景：导入即登记——OS 命令集全部命令在 mgr 注册表可寻址；绝对路径形态经前缀映射可执行。 */
 test('导入即登记：OS 命令集全部在名单、cd/exit 内建在册、/usr/bin/open 前缀映射可执行', () => {
   // 输入：读 mgr 注册表自省名单；spawnSync 绝对路径形态的 open
-  const paths = mgr.defined();
+  const paths = mgr.t_defined();
   const wanted = [
     '/mock-cmd/usr/bin/open', '/mock-cmd/usr/bin/kill',
     '/mock-cmd/bin/ls', '/mock-cmd/bin/pwd', '/mock-cmd/bin/cwd',
@@ -258,17 +258,17 @@ test('pwd/cwd：与 liteProcess.cwd() 同源（假世界/真实世界各自口�
   const done = setup();
   try {
     // 输入：安装虚拟当前目录后 spawnSync pwd
-    liteProcess.mock({ cwd: '/mock/project' });
+    liteProcess.t_mock({ cwd: '/mock/project' });
     const pwd = liteChildProcess.spawnSync('pwd', [], { encoding: 'utf8' });
     // 预期 1：假世界回显虚拟当前目录
     assert.equal(pwd.stdout, '/mock/project\n', '假世界应回显虚拟 cwd');
-    liteProcess.unmock();
+    liteProcess.t_unmock();
     // 输入：真实世界 spawnSync cwd
     const real = liteChildProcess.spawnSync('cwd', [], { encoding: 'utf8' });
     // 预期 2：真实世界回显 process.cwd()
     assert.equal(real.stdout, `${process.cwd()}\n`, '真实世界应回显 process.cwd()');
   } finally {
-    liteProcess.unmock();
+    liteProcess.t_unmock();
     done();
   }
 });
@@ -440,7 +440,7 @@ test('cd 命令：切换回写 liteProcess.cwd、相对路径按当前 cwd 解�
   const done = setup();
   try {
     // 输入：假世界（虚拟 cwd=/mock/project）下 spawnSync cd 切子目录
-    liteProcess.mock({ cwd: '/mock/project' });
+    liteProcess.t_mock({ cwd: '/mock/project' });
     liteFs.mkdirSync('/mock/project/sub', { recursive: true });
     const cd = liteChildProcess.spawnSync('cd', ['sub'], {});
     // 预期 1：切换成功
@@ -457,13 +457,13 @@ test('cd 命令：切换回写 liteProcess.cwd、相对路径按当前 cwd 解�
     const none = liteChildProcess.spawnSync('cd', [], {});
     // 预期 5：无参数按 usage 失败
     assert.equal(none.status, 1, '无参数 cd 应失败');
-    liteProcess.unmock();
+    liteProcess.t_unmock();
     // 输入：假世界外（liteProcess 未 mock）spawnSync cd
     const outside = liteChildProcess.spawnSync('cd', ['/mock/project'], {});
     // 预期 6：假世界外按失败收场（真实子进程改不了父进程 cwd）
     assert.equal(outside.status, 1, '假世界外 cd 应失败');
   } finally {
-    liteProcess.unmock();
+    liteProcess.t_unmock();
     done();
   }
 });
@@ -473,7 +473,7 @@ test('cd 命令：切换回写 liteProcess.cwd、相对路径按当前 cwd 解�
 test('exit 命令：spawnSync 转子进程退出码、spawn 按码收场、退出意图入账', async () => {
   const done = setup();
   try {
-    liteProcess.mock({ cwd: '/mock/project' });
+    liteProcess.t_mock({ cwd: '/mock/project' });
     // 输入：spawnSync exit 3
     const sync = liteChildProcess.spawnSync('exit', ['3'], {});
     // 预期 1：同步面按该退出码收场（ProcessExitError 被派遣层转换为结果对象）
@@ -483,14 +483,14 @@ test('exit 命令：spawnSync 转子进程退出码、spawn 按码收场、退�
     const closed = await liteChildProcess.waitForClose(child);
     // 预期 2：异步面子进程以该码退出
     assert.deepEqual(closed, { code: 5, signal: null }, 'spawn exit 应以码 5 退出');
-    // 预期 3：退出意图均入账（liteProcess.exitCodes 可观测）
-    assert.deepEqual(liteProcess.exitCodes(), [3, 5], '退出意图应入账');
+    // 预期 3：退出意图均入账（liteProcess.t_exitCodes 可观测）
+    assert.deepEqual(liteProcess.t_exitCodes(), [3, 5], '退出意图应入账');
     // 输入：无参数 exit（缺省码 0）
     const zero = liteChildProcess.spawnSync('exit', [], {});
     // 预期 4：缺省退出码 0
     assert.equal(zero.status, 0, '无参数 exit 应按码 0 收场');
   } finally {
-    liteProcess.unmock();
+    liteProcess.t_unmock();
     done();
   }
 });

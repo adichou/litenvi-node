@@ -1,7 +1,7 @@
-// lite-cmd-git 门面用例（node:test 形态，可 `node --test` 或直跑）：git 命令集——导入即向
+// lite-cmd-git 门面用例（node:test 形态，可 `node --test` 或直跑）：git 命令集——调用 t_install 后向
 // lite-cmd-mgr 登记（/mock-cmd/usr/bin/git）；执行入口经 lite-child_process.spawnSync('git',
-// argv, options) 分派到达：调用统一记在 liteChildProcess.calls()，回包经 onRun 钩子注入
-//（mgr.command('git').onRun 安装；返回 { status, stdout, stderr } 浅合并覆盖默认）、钩子返回
+// argv, options) 分派到达：调用统一记在 liteChildProcess.t_calls()，回包经 onRun 钩子注入
+//（mgr.command('git').t_onRun 安装；返回 { status, stdout, stderr } 浅合并覆盖默认）、钩子返回
 // undefined 视为未命中——回落内置 mini-git 真实语义（未装钩子同口径）。运行账本与清理
 // 统一归 lite-child_process。内置 mini-git：仓库模型落在 lite-fs 内存卷的
 // <cwd>/.git/ 下（HEAD/refs/heads/objects/index.json，对象 = 类型行 + blob 原始内容或
@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import liteChildProcess from '../lite-child_process.mjs';
-import '../lite-cmd-git.mjs';
+import { t_install } from '../lite-cmd-git.mjs';
 import mgr from '../lite-cmd-mgr.mjs';
 import liteFs from '../lite-fs.mjs';
 import nativeFs from 'node:fs';
@@ -25,23 +25,24 @@ import os from 'node:os';
 // 系统卷）；收尾卸载子进程运行态并摘除钩子。卷排除本仓库根（真实文件不落卷）
 const REAL_ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 function setup() {
-  liteFs.mock({ exclude: [REAL_ROOT] });
+  t_install();
+  liteFs.t_mock({ exclude: [REAL_ROOT] });
   liteFs.mkdirSync('/mock/project', { recursive: true });
   liteFs.mkdirSync('/mock/root', { recursive: true });
   liteFs.mkdirSync('/mock/elsewhere', { recursive: true });
-  liteChildProcess.mock();
-  mgr.command('git').onRun(null);
+  liteChildProcess.t_mock();
+  mgr.command('git').t_onRun(null);
   return () => {
-    mgr.command('git').onRun(null);
-    liteChildProcess.unmock();
-    liteFs.unmock();
+    mgr.command('git').t_onRun(null);
+    liteChildProcess.t_unmock();
+    liteFs.t_unmock();
   };
 }
 
 // Git 执行器：复用内存卷并固定 cwd，每次调用均经 liteChildProcess.spawnSync 执行；
 // 卷随用例丢弃（setup 收尾统一 unmock），跨用例仓库自然消失
 function volumeGit(cwd) {
-  liteFs.mock({ exclude: [REAL_ROOT] });
+  liteFs.t_mock({ exclude: [REAL_ROOT] });
   liteFs.mkdirSync(cwd, { recursive: true });
   return (argv) => liteChildProcess.spawnSync('git', argv, { cwd, encoding: 'utf8' });
 }
@@ -49,6 +50,238 @@ const write = (root, rel, text) => {
   liteFs.mkdirSync(path.dirname(path.join(root, ...rel.split('/'))), { recursive: true });
   liteFs.writeFileSync(path.join(root, ...rel.split('/')), text);
 };
+
+/** 场景：重复显式安装不覆盖既有脚本钩子和一次性故障，后续 Git 仍执行内置实现。 */
+test('重复 t_install 保留钩子与故障配置', () => {
+  const done = setup();
+  let remove;
+  try {
+    const git = volumeGit('/mock/project');
+    assert.equal(git(['init', '-b', 'main']).status, 0, '安装后应能初始化仓库');
+    let hookCalls = 0;
+    mgr.command('git').t_onRun(() => { hookCalls++; });
+    remove = mgr.command('git').t_inject({ subcommand: 'status', exit: 73, stderr: 'installed-fault', once: true });
+    t_install();
+    t_install();
+    const failed = git(['status', '--porcelain']);
+    assert.equal(failed.status, 73, '重复安装应保留已有故障');
+    assert.equal(failed.stderr, 'installed-fault', '故障内容应保持不变');
+    const recovered = git(['status', '--porcelain']);
+    assert.equal(recovered.status, 0, '一次性故障消费后应回到内置 Git');
+    assert.equal(recovered.stdout, '', '空仓库状态应为空');
+    assert.equal(hookCalls, 1, '重复安装应保留原钩子，故障请求不执行钩子');
+  } finally {
+    remove?.();
+    done();
+  }
+});
+
+/** 场景：合并提交的 log 和 diff-tree 文件清单与真实 Git 一致。 */
+test('真实 Git 对照：合并提交默认不输出变更路径', () => {
+  const temp = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-git-merge-reference-'));
+  const root = nativeFs.realpathSync(temp);
+  const env = { ...process.env, LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const config = ['-c', 'user.name=Reference', '-c', 'user.email=reference@example.invalid', '-c', 'commit.gpgSign=false', '-c', 'core.hooksPath=/dev/null'];
+  const scenario = (cwd, fs) => {
+    const run = args => {
+      const r = liteChildProcess.spawnSync('git', [...config, ...args], { cwd, env, encoding: 'utf8' });
+      assert.equal(r.status, 0, `Git ${args.join(' ')} 应成功：${r.stderr}`);
+      return r.stdout;
+    };
+    run(['init', '-q', '-b', 'main']);
+    fs.writeFileSync(`${cwd}/base.txt`, 'base');
+    run(['add', '--', 'base.txt']); run(['commit', '-q', '-m', 'base']);
+    run(['switch', '-c', 'dev']); run(['switch', '-c', 'side']);
+    fs.writeFileSync(`${cwd}/README.md`, '文档');
+    run(['add', '--', 'README.md']); run(['commit', '-q', '-m', 'doc']);
+    run(['switch', 'dev']); run(['merge', '--no-ff', '-m', 'merge', 'side']);
+    return [run(['log', '-1', '--format=%s', '--name-only']), run(['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])];
+  };
+  try {
+    const expected = scenario(root, nativeFs);
+    const done = setup();
+    try { assert.deepEqual(scenario('/mock/project', liteFs), expected, '合并提交文件清单应与真实 Git 一致'); }
+    finally { done(); }
+  } finally { nativeFs.rmSync(temp, { recursive: true, force: true }); }
+});
+
+/** 场景：真实 Git 与内存 Git 对照删除、路径不匹配和限定提交的返回值及仓库状态。 */
+test('真实 Git 对照：暂存删除、无匹配 add 与限定提交', () => {
+  const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-git-rm-reference-'));
+  const realRoot = nativeFs.realpathSync(temporary);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
+  Object.assign(env, { LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' });
+  const config = ['-c', 'user.name=Reference', '-c', 'user.email=reference@example.invalid',
+    '-c', 'commit.gpgSign=false', '-c', 'core.hooksPath=/dev/null'];
+  const scenario = (root, filesystem) => {
+    const observed = [];
+    const run = args => {
+      const result = liteChildProcess.spawnSync('git', [...config, ...args], { cwd: root, env, encoding: 'utf8' });
+      observed.push({ command: args.join(' '), status: result.status, stdout: result.stdout, stderr: result.stderr });
+      return result;
+    };
+    const put = (name, content) => filesystem.writeFileSync(path.join(root, name), content);
+    run(['init', '-q', '-b', 'main']);
+    put('shared.txt', 'shared\n');
+    put('other.txt', 'old\n');
+    run(['add', '--', 'shared.txt', 'other.txt']);
+    run(['commit', '-q', '-m', 'baseline']);
+    put('other.txt', 'local change\n');
+    run(['rm', '--', 'other.txt']);
+    run(['status', '--porcelain']);
+    put('other.txt', 'old\n');
+    put('other.txt', 'staged change\n');
+    run(['add', '--', 'other.txt']);
+    run(['rm', '--', 'other.txt']);
+    run(['status', '--porcelain']);
+    put('other.txt', 'old\n');
+    run(['add', '--', 'other.txt']);
+    run(['rm', '--', 'missing.txt']);
+    run(['add', '-A', '--', 'shared.txt', 'missing.txt']);
+    run(['status', '--porcelain']);
+    put('other.txt', 'changed\n');
+    run(['add', '--', 'other.txt']);
+    run(['rm', '--', 'shared.txt']);
+    run(['status', '--porcelain']);
+    run(['add', '-A', '--', 'shared.txt']);
+    run(['commit', '-q', '--only', '-m', 'delete', '--', 'shared.txt']);
+    run(['status', '--porcelain']);
+    run(['show', 'HEAD:other.txt']);
+    run(['ls-tree', '--name-only', '-r', 'HEAD']);
+    observed.push({ sharedExists: filesystem.existsSync(path.join(root, 'shared.txt')) });
+    return observed;
+  };
+  try {
+    const expected = scenario(realRoot, nativeFs);
+    const done = setup();
+    try {
+      const actual = scenario('/mock/project', liteFs);
+      assert.deepEqual(actual, expected, '删除、失败输出、提交快照和剩余暂存项应与真实 Git 一致');
+    } finally { done(); }
+  } finally { nativeFs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+/** 场景：已跟踪文件经 rm 暂存删除，路径限定提交保留其他暂存变更。 */
+test('暂存删除：rm、无匹配 add 与限定提交', () => {
+  const done = setup();
+  try {
+    const root = '/mock/project';
+    const git = args => liteChildProcess.spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    assert.equal(git(['init']).status, 0, '应初始化仓库');
+    write(root, 'shared.json', '原内容');
+    write(root, 'other.txt', '原内容');
+    assert.equal(git(['add', '--', 'shared.json', 'other.txt']).status, 0, '应暂存初始文件');
+    assert.equal(git(['commit', '-m', '初始']).status, 0, '应提交初始文件');
+    write(root, 'other.txt', '其他暂存修改');
+    assert.equal(git(['add', '--', 'other.txt']).status, 0, '应暂存无关修改');
+    assert.equal(git(['rm', '-q', '--', 'shared.json']).status, 0, '应成功暂存删除');
+    assert.equal(liteFs.existsSync(`${root}/shared.json`), false, '工作树文件应被删除');
+    assert.equal(git(['ls-files', '--error-unmatch', '--', 'shared.json']).status, 1, '已删除路径不应在暂存区');
+    assert.match(git(['status', '--porcelain']).stdout, /D  shared\.json/, '状态应显示已暂存删除');
+    const failedAdd = git(['add', '-A', '--', 'shared.json']);
+    assert.notEqual(failedAdd.status, 0, '磁盘与暂存区均无匹配路径时 add 应失败');
+    assert.match(failedAdd.stderr, /pathspec/, '失败应说明路径不匹配');
+    assert.equal(git(['commit', '--only', '-m', '删除共享文件', '--', 'shared.json']).status, 0, '限定提交应收录暂存删除');
+    assert.equal(git(['show', 'HEAD:shared.json']).status, 128, '新提交不应包含已删除文件');
+    assert.equal(git(['show', 'HEAD:other.txt']).stdout, '原内容', '限定提交不应卷入其他暂存修改');
+    assert.match(git(['status', '--porcelain']).stdout, /M  other\.txt/, '其他修改应仍在暂存区');
+    assert.doesNotMatch(git(['status', '--porcelain']).stdout, /shared\.json/, '已提交删除应退出工作区差异');
+  } finally { done(); }
+});
+
+/** 场景：删除有未保存修改或不存在的路径时拒绝且不改变任何文件。 */
+test('git rm 保护未提交修改并拒绝无匹配路径', () => {
+  const done = setup();
+  try {
+    const root = '/mock/project';
+    const git = args => liteChildProcess.spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    assert.equal(git(['init']).status, 0, '应初始化仓库');
+    write(root, 'one.txt', '原内容');
+    write(root, 'two.txt', '原内容');
+    assert.equal(git(['add', '--', 'one.txt', 'two.txt']).status, 0, '应暂存文件');
+    assert.equal(git(['commit', '-m', '初始']).status, 0, '应提交文件');
+    write(root, 'two.txt', '未暂存修改');
+    assert.notEqual(git(['rm', '--', 'one.txt', 'two.txt']).status, 0, '包含未暂存修改时应拒绝删除');
+    assert.equal(liteFs.existsSync(`${root}/one.txt`), true, '失败时不得删除其他路径');
+    assert.equal(liteFs.readFileSync(`${root}/two.txt`, 'utf8'), '未暂存修改', '失败时应保留修改内容');
+    assert.notEqual(git(['rm', '--', 'missing.txt']).status, 0, '未跟踪路径应拒绝删除');
+    assert.notEqual(git(['add', '-A', '--', 'one.txt', 'missing.txt']).status, 0, '混合路径存在无匹配项时 add 应失败');
+    assert.match(git(['status', '--porcelain']).stdout, / M two\.txt/, '失败操作后未暂存修改仍应保留');
+  } finally { done(); }
+});
+
+/** 场景：目录删除需要 -r，且未支持的选项不会静默改变文件。 */
+test('git rm 目录保护及递归删除', () => {
+  const done = setup();
+  try {
+    const root = '/mock/project';
+    const git = args => liteChildProcess.spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    assert.equal(git(['init']).status, 0, '应初始化仓库');
+    write(root, 'shared/a.txt', '内容');
+    assert.equal(git(['add', '--', 'shared']).status, 0, '应暂存目录内容');
+    assert.equal(git(['commit', '-m', '初始']).status, 0, '应提交目录内容');
+    assert.notEqual(git(['rm', '--', 'shared']).status, 0, '未指定 -r 时应拒绝目录');
+    assert.notEqual(git(['rm', '--cached', '--', 'shared/a.txt']).status, 0, '不支持的选项应明确失败');
+    assert.equal(liteFs.existsSync(`${root}/shared/a.txt`), true, '失败后文件应仍然存在');
+    assert.equal(git(['rm', '-r', '--', 'shared']).status, 0, '指定 -r 后应删除目录内已跟踪文件');
+    assert.match(git(['status', '--porcelain']).stdout, /D  shared\/a\.txt/, '递归删除应进入暂存区');
+  } finally { done(); }
+});
+
+/** 场景：Git 故障按子命令命中，同步与异步执行共享规则且忽略支持的全局选项。 */
+test('Git 故障按子命令匹配并只在命中时消费', async () => {
+  const done = setup();
+  const removers = [];
+  try {
+    liteFs.mkdirSync('/mock/repo', { recursive: true });
+    const git = args => liteChildProcess.spawnSync('git', args, { cwd: '/mock/repo', encoding: 'utf8' });
+    assert.equal(git(['init']).status, 0, '应先初始化隔离仓库');
+    liteFs.writeFileSync('/mock/repo/a.txt', 'a');
+    removers.push(mgr.command('git').t_inject({ subcommand: 'commit', exit: 8, stderr: 'commit 错误', once: true }));
+    removers.push(mgr.command('git').t_inject({ subcommand: 'add', exit: 7, stderr: 'add 错误', once: true }));
+    assert.equal(git(['status', '--porcelain']).status, 0, '不匹配的子命令应正常运行');
+    const add = git(['--no-optional-locks', '-c', 'user.name=test', '-C', '/mock/repo', 'add', '--', 'a.txt']);
+    assert.equal(add.status, 7, '应跳过未匹配的先前规则并命中 add');
+    assert.equal(add.stderr, 'add 错误', '应保留匹配规则的错误输出');
+    assert.equal(git(['add', '--', 'a.txt']).status, 0, '一次性规则应在实际命中后移除');
+    const child = liteChildProcess.spawn('git', ['commit', '-m', 'first'], { cwd: '/mock/repo' });
+    let stderr = '';
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    assert.deepEqual(await liteChildProcess.waitForClose(child), { code: 8, signal: null }, '异步命令应命中 commit 故障');
+    assert.equal(stderr, 'commit 错误', '异步命令应收到匹配的错误输出');
+    assert.equal(git(['commit', '-m', 'first']).status, 0, '异步命中后一次性规则应消失');
+    assert.throws(() => mgr.command('git').t_inject({ subcommand: '', exit: 1 }), /subcommand/, '空子命令应拒绝');
+    assert.throws(() => mgr.command('git').t_inject({ subcommand: 2, exit: 1 }), /subcommand/, '非字符串子命令应拒绝');
+    assert.throws(() => mgr.command('/bin/echo').t_inject({ subcommand: 'add', exit: 1 }), /git|Git/, '子命令匹配仅支持 Git');
+  } finally {
+    for (const remove of removers) remove();
+    done();
+  }
+});
+
+/** 场景：Git 子命令持续故障可解除，未筛选故障仍按注入顺序生效。 */
+test('Git 子命令持续故障解除与全局规则兼容', async () => {
+  const done = setup();
+  const removers = [];
+  try {
+    liteFs.mkdirSync('/mock/repo', { recursive: true });
+    const git = args => liteChildProcess.spawnSync('git', args, { cwd: '/mock/repo', encoding: 'utf8' });
+    assert.equal(git(['init']).status, 0, '应先初始化隔离仓库');
+    liteFs.writeFileSync('/mock/repo/a.txt', 'a');
+    removers.push(mgr.command('git').t_inject({ subcommand: 'add', exit: 12 }));
+    removers.push(mgr.command('git').t_inject({ exit: 9, once: true }));
+    assert.equal(git(['status', '--porcelain']).status, 9, '未筛选规则应命中其他子命令');
+    assert.equal(git(['add', 'a.txt']).status, 12, '持续 add 故障应命中');
+    assert.equal(git(['add', 'a.txt']).status, 12, '持续故障不应自动解除');
+    assert.match(git(['status', '--porcelain']).stdout, /\?\? a\.txt/, '失败的 add 不应改变暂存区');
+    removers[0]();
+    assert.equal(git(['add', 'a.txt']).status, 0, '解除故障后应恢复正常 add');
+    assert.match(git(['status', '--porcelain']).stdout, /A  a\.txt/, '恢复后文件应进入暂存区');
+  } finally {
+    for (const remove of removers) remove();
+    done();
+  }
+});
 
 /** 场景：同一组操作分别交给真实 Git 与内存 Git，对比返回字段与工作树效果。 */
 test('真实 Git 对照：错误输出、分支切换、引用、写命令与退出码', () => {
@@ -163,8 +396,105 @@ test('真实 Git 对照：错误输出、分支切换、引用、写命令与退
   }
 });
 
-/** 场景：导入即登记——通过子进程入口执行 Git，裸名、系统路径与内存卷路径均命中同一仓库。 */
-test('导入即登记：spawnSync 通过裸名与绝对路径执行 Git', () => {
+/** 场景：中文、重音字符与其他 Unicode 引用可创建、切换、解析和枚举，排序与真实 Git 一致。 */
+test('真实 Git 对照：Unicode 分支与标签名称及引用排序', () => {
+  // 输入：中文初始分支、中文文件与提交说明，混合大小写、重音、分层名称、私用字符和 emoji 引用
+  const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-unicode-refs-'));
+  const realRoot = nativeFs.realpathSync(temporary);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
+  Object.assign(env, { LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' });
+  const options = ['-c', 'user.name=Reference', '-c', 'user.email=reference@example.invalid',
+    '-c', 'commit.gpgSign=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.precomposeUnicode=false',
+    '-c', 'branch.sort=refname', '-c', 'tag.sort=refname'];
+  const names = ['发布版', 'é', 'cafe\u0301', '功能/开发', '_draft', '+release', '版本-\ue000', '版本-😀', 'a', 'Z', 'z-last'];
+  const scenario = (root, fileSystem) => {
+    const responses = [];
+    const run = args => {
+      const result = liteChildProcess.spawnSync('git', [...options, ...args], { cwd: root, env, encoding: 'utf8' });
+      assert.equal(result.status, 0, `${JSON.stringify(args)} 应接受合法 Unicode 引用：${result.stderr}`);
+      responses.push({ args, stdout: result.stdout.replace(/\b[0-9a-f]{40}\b/g, '<sha>') });
+    };
+    run(['init', '-q', '-b', '主分支']);
+    fileSystem.writeFileSync(path.join(root, '中文.txt'), '中文正文\n');
+    run(['add', '中文.txt']);
+    run(['commit', '-q', '-m', 'feat: 中文提交说明']);
+    for (const name of names) {
+      run(['branch', name]);
+      run(['switch', '-q', name]);
+      run(['branch', '--show-current']);
+      run(['rev-parse', name]);
+    }
+    run(['branch', '@']);
+    run(['switch', '-q', '-c', '新建/开发']);
+    run(['checkout', '-q', '主分支']);
+    run(['branch', '--format=%(refname:short)']);
+    for (const name of [...names, '@']) {
+      run(['tag', name]);
+      run(['rev-parse', `refs/tags/${name}`]);
+    }
+    run(['tag', '--list']);
+    run(['for-each-ref', '--format=%(refname)']);
+    return responses;
+  };
+  try {
+    const expected = scenario(realRoot, nativeFs);
+    const done = setup();
+    try {
+      // 输入：在内存仓库重放同一组操作，执行全部通过 child_process 公共入口
+      const root = '/mock/unicode-refs';
+      liteFs.mkdirSync(root, { recursive: true });
+      const actual = scenario(root, liteFs);
+      // 预期 1：引用名称完整保留，创建、切换和解析响应与真实 Git 一致
+      assert.deepEqual(actual, expected, 'Unicode 引用应可用，枚举顺序应与真实 Git 相同且不受默认语言排序影响');
+      // 预期 2：切换后仍可读取原始中文路径与正文
+      assert.equal(liteFs.readFileSync(`${root}/中文.txt`, 'utf8'), '中文正文\n', 'Unicode 引用操作不能改变中文文件内容');
+    } finally { done(); }
+  } finally { nativeFs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+/** 场景：放行 Unicode 引用后，Git 禁止的路径组件、控制字符和特殊序列仍被拒绝且不产生引用。 */
+test('真实 Git 对照：非法分支与标签名称仍拒绝', () => {
+  // 输入：空名、空白、点路径、锁文件组件、非法分隔符、修订表达式符号与控制字符
+  const names = ['', 'bad name', 'a..b', '.hidden', 'a/.hidden', 'a.lock', 'a.lock/b', '/leading',
+    'trailing/', 'double//slash', 'end.', 'a@{b', 'a~b', 'a^b', 'a:b', 'a?b', 'a*b', 'a[b', 'a\\b', 'a\u0001b', 'a\u007fb'];
+  const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-invalid-refs-'));
+  const realRoot = nativeFs.realpathSync(temporary);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
+  Object.assign(env, { LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' });
+  const options = ['-c', 'user.name=Reference', '-c', 'user.email=reference@example.invalid',
+    '-c', 'commit.gpgSign=false', '-c', 'core.hooksPath=/dev/null'];
+  const scenario = (root, fileSystem) => {
+    const run = args => liteChildProcess.spawnSync('git', [...options, ...args], { cwd: root, env, encoding: 'utf8' });
+    assert.equal(run(['init', '-q', '-b', 'main']).status, 0, '非法名称测试应先建立合法仓库');
+    fileSystem.writeFileSync(path.join(root, 'seed'), 'seed');
+    assert.equal(run(['add', 'seed']).status, 0, '基线文件应成功暂存');
+    assert.equal(run(['commit', '-q', '-m', 'baseline']).status, 0, '基线提交应成功');
+    const outcomes = names.map(name => ({ name, rejected: ['branch', 'tag'].map(command => run([command, name]).status !== 0),
+      switchRejected: run(['switch', '-q', '-c', name]).status !== 0 }));
+    return { outcomes, refs: run(['for-each-ref', '--format=%(refname)']).stdout,
+      current: run(['branch', '--show-current']).stdout };
+  };
+  try {
+    const expected = scenario(realRoot, nativeFs);
+    // 预期 1：输入矩阵中的每个名称都被真实 Git 的分支、标签和创建切换入口拒绝
+    for (const { name, rejected, switchRejected } of expected.outcomes) {
+      assert.deepEqual(rejected, [true, true], `${JSON.stringify(name)} 应为真实 Git 禁止的引用名`);
+      assert.equal(switchRejected, true, `${JSON.stringify(name)} 不应能创建并切换分支`);
+    }
+    const done = setup();
+    try {
+      // 输入：在内存仓库重放非法名称矩阵
+      const root = '/mock/invalid-refs';
+      liteFs.mkdirSync(root, { recursive: true });
+      const actual = scenario(root, liteFs);
+      // 预期 2：拒绝结果与真实 Git 一致，没有新引用，当前分支仍为 main
+      assert.deepEqual(actual, expected, 'Unicode 放行后仍应拒绝非法引用且不改变仓库引用状态');
+    } finally { done(); }
+  } finally { nativeFs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+/** 场景：显式安装——通过子进程入口执行 Git，裸名、系统路径与内存卷路径均命中同一仓库。 */
+test('显式安装：spawnSync 通过裸名与绝对路径执行 Git', () => {
   // 输入：建立内存会话，通过 git 裸名初始化仓库
   const done = setup();
   try {
@@ -216,8 +546,8 @@ test('调用入账：argv/options 原样记录（含 --no-optional-locks 前缀�
     // 输入：带只读锁前缀、cwd 与 encoding 选项，通过 spawnSync 执行 Git
     liteChildProcess.spawnSync('git', ['--no-optional-locks', 'status', '--porcelain'], { cwd: '/mock/project', encoding: 'utf8' });
     // 预期 1：调用应入账一条
-    assert.equal(liteChildProcess.calls().length, 1, '调用应入账一条');
-    const call = liteChildProcess.calls()[0];
+    assert.equal(liteChildProcess.t_calls().length, 1, '调用应入账一条');
+    const call = liteChildProcess.t_calls()[0];
     // 预期 2：argv 应原样记录
     assert.deepEqual(call.args, ['--no-optional-locks', 'status', '--porcelain'], 'argv 应原样记录');
     // 预期 3：options.cwd 应如实记录
@@ -234,7 +564,7 @@ test('onRun 全量覆盖：status/stdout/stderr 逐字段生效', () => {
   const done = setup();
   try {
     // 输入：安装返回完整回包的钩子后 spawnSync git
-    mgr.command('git').onRun(() => ({ status: 1, stdout: 'out\n', stderr: 'err\n' }));
+    mgr.command('git').t_onRun(() => ({ status: 1, stdout: 'out\n', stderr: 'err\n' }));
     const r = liteChildProcess.spawnSync('git', ['push'], { encoding: 'utf8' });
     // 预期 1：status 应为钩子注入的 1
     assert.equal(r.status, 1, 'status 应为钩子注入的 1');
@@ -252,7 +582,7 @@ test('onRun 部分覆盖：仅返回 stdout，status/stderr 保持默认', () =>
   const done = setup();
   try {
     // 输入：安装只返回 stdout 的钩子后 spawnSync git
-    mgr.command('git').onRun((call) => ({ stdout: `${call.argv[0]} ok\n` }));
+    mgr.command('git').t_onRun((call) => ({ stdout: `${call.argv[0]} ok\n` }));
     const r = liteChildProcess.spawnSync('git', ['status'], { encoding: 'utf8' });
     // 预期 1：stdout 应为钩子注入内容
     assert.equal(r.stdout, 'status ok\n', 'stdout 应为钩子注入内容');
@@ -274,7 +604,7 @@ test('onRun 未命中：返回 undefined 回落内置实现，命中分支回钩
     const run = volumeGit('/mock/fallback');
     // 输入：通过 spawnSync 执行 git init
     run(['init', '-b', 'main']);
-    mgr.command('git').onRun((call) => (call.argv[0] === 'log' ? { stdout: 'logs\n' } : undefined));
+    mgr.command('git').t_onRun((call) => (call.argv[0] === 'log' ? { stdout: 'logs\n' } : undefined));
     // 输入：通过 spawnSync 执行 git log
     const hit = run(['log']);
     // 输入：通过 spawnSync 执行 git rev-parse
@@ -296,9 +626,9 @@ test('钩子与账本同源：onRun 的 call.argv/call.options 与 calls() 记�
   try {
     // 输入：安装捕获 call 的钩子后 spawnSync git
     let seen = null;
-    mgr.command('git').onRun((call) => { seen = { argv: [...call.argv], cwd: call.options.cwd }; });
+    mgr.command('git').t_onRun((call) => { seen = { argv: [...call.argv], cwd: call.options.cwd }; });
     liteChildProcess.spawnSync('git', ['branch', '--show-current'], { cwd: '/mock/root' });
-    const rec = liteChildProcess.calls()[0];
+    const rec = liteChildProcess.t_calls()[0];
     // 预期 1：钩子 call.argv 应与账本一致
     assert.deepEqual(seen.argv, rec.args, '钩子 call.argv 应与账本一致');
     // 预期 2：钩子 call.options 应与账本一致
@@ -1162,7 +1492,7 @@ test('Git 文件故障：add 遇到 EACCES/EIO 失败，索引保留，撤销后
       write(root, 'tracked', 'content');
       assert.equal(run(['add', 'preserved']).status, 0, '预先暂存应成功');
       // 输入：公开故障注入仅阻断 tracked；同次 add 先处理可读文件，再遇到读取失败
-      remove = liteFs.inject({ op: 'readFileSync', path: root + '/tracked', code });
+      remove = liteFs.t_inject({ op: 'readFileSync', path: root + '/tracked', code });
       const asyncAdd = async () => {
         const child = liteChildProcess.spawn('git', ['add', 'readable', 'tracked'], { cwd: root });
         let stdout = '', stderr = '';
@@ -1219,7 +1549,7 @@ test('Git 写入失败：ENOSPC 通过命令结果报告，撤销后可恢复', 
     run(['init', '-q', '-b', 'main']);
     write('/mock/git-full', 'tracked', 'content');
     // 输入：模拟本次暂存期间整个文件系统无法写入，不指定 Git 内部布局路径
-    remove = liteFs.inject({ op: 'writeFileSync', code: 'ENOSPC' });
+    remove = liteFs.t_inject({ op: 'writeFileSync', code: 'ENOSPC' });
     const result = run(['add', 'tracked']);
     // 预期：命令失败携带错误码，恢复写入能力后可继续操作
     assert.equal(result.status, 128, '写满应使暂存命令失败');
@@ -1228,12 +1558,3 @@ test('Git 写入失败：ENOSPC 通过命令结果报告，撤销后可恢复', 
     assert.equal(run(['add', 'tracked']).status, 0, '恢复写入后应可暂存');
   } finally { remove?.(); done(); }
 });
-
-
-/* 剩余未覆盖行的黑盒用例设计（按本轮源文件行号）：
- * 133、154：截断真实/内存仓库的标准 .git/HEAD，再经 spawnSync('git', ['status'/'commit'])
- * 对比无效仓库的错误码、stderr 和文件副作用；不直接调用 HEAD 解析函数。
- * 231：经 spawnSync('git', ['check-ignore', '']) 提交空路径参数，与真实 Git 的无效 pathspec
- * 结果对照。原生 Git 返回 128；当前逻辑可能只返回未匹配，需作为行为差异处理。
- * 上述防御输入尚未作为通过用例，不能据此宣称这些行已经覆盖或行为已经一致。
- */

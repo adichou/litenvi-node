@@ -3,7 +3,7 @@
 // 空闲口）：浏览器等真实客户端经真实 loopback socket 到达 socket 前端，前端把请求回灌进程内
 // 管线（liteHttp.request 传输层故障 → handle() 服务端故障 → 真实 handler），回包写回真实
 // socket；进程内直调 liteHttp.request 仍走 handle() 内存路由（不经 socket）。inject 注入服务端
-// 故障（handler 已执行，回包被 wait 闸门挂起或按 status 错误回包替换）——与 lite-http.inject
+// 故障（handler 已执行，回包被 wait 闸门挂起或按 status 错误回包替换）——与 lite-http.t_inject
 //（请求未达服务端即被传输层拦截）分层归属。
 // 用例注释格式：方法级写测试场景；语句中「输入」部分标记输入；断言按「预期 1/2/…」逐条注释。
 import { test } from 'node:test';
@@ -13,6 +13,68 @@ import net from 'node:net';
 import liteHttp from '../lite-http.mjs';
 import liteServer from '../lite-server.mjs';
 import { referenceHandler, requestSnapshot, _urlInjectionRequest } from './lite-http.test.mjs'; // 对照夹具迁至 lite-http.test.mjs（http-reference.mjs 已删）
+
+test('多个服务按域名和端口独立路由，关闭互不影响', async () => {
+  liteHttp.t_mock();
+  liteServer.t_mock();
+  const board = liteServer.createServer((_req, res) => res.end('board')).listen(0);
+  await new Promise(resolve => board.once('listening', resolve));
+  const apple = liteServer.createServer((req, res) => res.end(`apple:${req.url}`));
+  const ready = new Promise(resolve => apple.once('listening', resolve));
+  apple.listen({ host: 'api.example.test', port: 80, virtual: true });
+  await ready;
+  try {
+    assert.deepEqual(apple.address(), { address: 'api.example.test', family: 'virtual', port: 80 }, '虚拟服务应公开监听地址');
+    assert.equal((await realGet(board.port, '/')).body, 'board', '真实回环请求应抵达看板');
+    assert.equal((await _urlInjectionRequest(liteHttp, { hostname: 'api.example.test', path: '/builds?x=1' })).body, 'apple:/builds?x=1', '指定域名应抵达模拟服务');
+    const wrong = await new Promise(resolve => liteHttp.request({ hostname: 'other.example.test', port: 80, path: '/' }).on('error', error => resolve(error.code)).end());
+    assert.equal(wrong, 'ECONNREFUSED', '其他域名不能误路由');
+    await new Promise(resolve => apple.close(resolve));
+    assert.equal(apple.address(), null, '虚拟服务关闭后不应保留监听地址');
+    assert.equal((await get(board.port, '/')).body, 'board', '关闭模拟服务不能影响看板');
+  } finally { liteServer.t_unmock(); liteHttp.t_unmock(); }
+});
+
+test('两个回环服务及同端口不同域名的虚拟服务彼此隔离', async () => {
+  liteHttp.t_mock(); liteServer.t_mock();
+  const first = liteServer.createServer((_req, res) => res.end('first')).listen(0);
+  const second = liteServer.createServer((_req, res) => res.end('second')).listen(0);
+  await Promise.all([first, second].map(server => new Promise(resolve => server.once('listening', resolve))));
+  const a = liteServer.createServer((_req, res) => res.end('a'));
+  const b = liteServer.createServer((_req, res) => res.end('b'));
+  await Promise.all([new Promise(resolve => a.listen({ virtual: true, host: 'a.test', port: 443 }, resolve)), new Promise(resolve => b.listen({ virtual: true, host: 'b.test', port: 443 }, resolve))]);
+  try {
+    assert.equal((await realGet(first.port, '/')).body, 'first', '第一个回环服务应保持可达');
+    assert.equal((await realGet(second.port, '/')).body, 'second', '第二个回环服务应保持可达');
+    assert.equal((await _urlInjectionRequest(liteHttp, { hostname: 'a.test', port: 443, path: '/' })).body, 'a', '域名 a 应路由到 a 服务');
+    assert.equal((await _urlInjectionRequest(liteHttp, { hostname: 'b.test', port: 443, path: '/' })).body, 'b', '相同端口的域名 b 应路由到 b 服务');
+    const duplicate = liteServer.createServer((_req, res) => res.end());
+    const error = new Promise(resolve => duplicate.once('error', resolve));
+    duplicate.listen({ virtual: true, host: 'A.TEST', port: 443 });
+    assert.equal((await error).code, 'EADDRINUSE', '相同域名端口不能重复监听');
+    assert.throws(() => duplicate.listen({ virtual: true, host: '', port: 0 }), /域名和端口/, '虚拟地址必须完整有效');
+    await new Promise(resolve => first.close(resolve));
+    assert.equal((await realGet(second.port, '/')).body, 'second', '关闭一个服务不得关闭另一个');
+  } finally { liteServer.t_unmock(); liteHttp.t_unmock(); }
+});
+
+test('虚拟服务关闭同样遵守故障闸门且立即停止路由', async () => {
+  liteHttp.t_mock(); liteServer.t_mock();
+  const gate = Promise.withResolvers();
+  const server = liteServer.createServer((_req, res) => res.end('ok'));
+  await new Promise(resolve => server.listen({ virtual: true, host: 'gate.test', port: 443 }, resolve));
+  try {
+    liteServer.t_inject({ operation: 'close', wait: gate.promise, once: true });
+    let closed = false;
+    const done = new Promise(resolve => server.close(() => { closed = true; resolve(); }));
+    const refusal = await new Promise(resolve => liteHttp.request({ hostname: 'gate.test', port: 443 }).on('error', error => resolve(error.code)).end());
+    assert.equal(refusal, 'ECONNREFUSED', '关闭后不应继续响应新请求');
+    assert.equal(closed, false, '关闭回调应等待故障闸门');
+    gate.resolve();
+    await done;
+    assert.equal(closed, true, '释放闸门后关闭应完成');
+  } finally { gate.resolve(); liteServer.t_unmock(); liteHttp.t_unmock(); }
+});
 
 function get(port, path) {
   return new Promise((resolve) => {
@@ -50,15 +112,15 @@ function realPost(port, path, body) {
 }
 
 async function withBoard(handler, run) {
-  liteHttp.mock();
-  liteServer.mock();
+  liteHttp.t_mock();
+  liteServer.t_mock();
   const server = liteServer.createServer(handler).listen(0);
   await new Promise((resolve) => server.once('listening', resolve)); // 真实绑定异步：就绪后才取实际端口
   try {
     return await run(server.port);
   } finally {
-    liteHttp.unmock();
-    liteServer.unmock();
+    liteHttp.t_unmock();
+    liteServer.t_unmock();
   }
 }
 
@@ -96,7 +158,7 @@ const freePort = () => new Promise((resolve, reject) => {
 /** 场景：原生客户端访问相同 handler，核对原生与内存服务的响应及监听/关闭生命周期。 */
 test('真实 Server 对照：监听地址、回调、响应头、字节与关闭事件', async () => {
   const scenario = async memory => {
-    if (memory) { liteHttp.mock(); liteServer.mock(); }
+    if (memory) { liteHttp.t_mock(); liteServer.t_mock(); }
     const events = [];
     const server = (memory ? liteServer : http).createServer(referenceHandler);
     const before = { listening: server.listening, address: server.address() };
@@ -117,7 +179,7 @@ test('真实 Server 对照：监听地址、回调、响应头、字节与关闭
       return { before, during, after: { listening: server.listening, address: server.address() }, events, responses };
     } finally {
       if (server.listening) await new Promise(resolve => server.close(resolve));
-      if (memory) { liteHttp.unmock(); liteServer.unmock(); }
+      if (memory) { liteHttp.t_unmock(); liteServer.t_unmock(); }
     }
   };
   const expected = await scenario(false);
@@ -150,8 +212,8 @@ test('内存路由基本面：loopback GET 回包来自真实 handler', async ()
 /** 场景：无监听服务——mock 但未登记服务或端口不符时按拒连。 */
 test('无监听服务：未登记服务/端口不符按 ECONNREFUSED 拒连', async () => {
   // 输入：mock 两门面但不 createServer，探活默认端口
-  liteHttp.mock();
-  liteServer.mock();
+  liteHttp.t_mock();
+  liteServer.t_mock();
   try {
     const refused = await get(8888, '/api/health');
     // 预期 1：未登记服务按拒连
@@ -161,8 +223,8 @@ test('无监听服务：未登记服务/端口不符按 ECONNREFUSED 拒连', as
     // 预期 2：端口不符按拒连
     assert.equal(wrongPort.code, 'ECONNREFUSED', '端口不符应按拒连');
   } finally {
-    liteHttp.unmock();
-    liteServer.unmock();
+    liteHttp.t_unmock();
+    liteServer.t_unmock();
   }
 });
 
@@ -177,7 +239,7 @@ test('服务端故障：注入 503 替换回包、handler 已执行、回包带�
       res.end(JSON.stringify({ ok: true }));
     },
     async (port) => {
-      liteServer.inject({ path: '/api/health', status: 503, body: { error: '服务暂不可用' } });
+      liteServer.t_inject({ path: '/api/health', status: 503, body: { error: '服务暂不可用' } });
       return get(port, '/api/health');
     },
   );
@@ -198,7 +260,7 @@ test('wait 闸门：放行前无回包、放行后真实回包不带故障标记
   const pending = await withBoard(
     (req, res) => res.end(JSON.stringify({ ok: true })),
     async (port) => {
-      liteServer.inject({ path: '/api/slow', wait: gate.promise });
+      liteServer.t_inject({ path: '/api/slow', wait: gate.promise });
       const req = get(port, '/api/slow');
       return Promise.race([req, new Promise((r) => setTimeout(() => r({ held: true }), 200))]);
     },
@@ -212,7 +274,7 @@ test('wait 闸门：放行前无回包、放行后真实回包不带故障标记
     (port) => {
       const g = Promise.withResolvers();
       const req = get(port, '/api/slow');
-      liteServer.inject({ path: '/api/slow', wait: g.promise });
+      liteServer.t_inject({ path: '/api/slow', wait: g.promise });
       g.resolve();
       return req;
     },
@@ -229,15 +291,15 @@ test('once 自毁与注入校验：只拦一次、2xx/phase/未 mock 注入拒�
   const out = await withBoard(
     (req, res) => res.end(JSON.stringify({ ok: true })),
     async (port) => {
-      liteServer.inject({ path: '/api/once', status: 503, once: true });
+      liteServer.t_inject({ path: '/api/once', status: 503, once: true });
       const first = await get(port, '/api/once');
       const second = await get(port, '/api/once');
       // 输入：注入 200 成功回包
       // 预期 1：2xx 成功回包替换拒绝
-      assert.throws(() => liteServer.inject({ path: '/x', status: 200, body: { ok: true } }), /400–599/, '不允许成功回包替换');
+      assert.throws(() => liteServer.t_inject({ path: '/x', status: 200, body: { ok: true } }), /400–599/, '不允许成功回包替换');
       // 输入：带 phase 字段注入
       // 预期 2：phase 字段拒绝（阶段已由注入入口本身表达）
-      assert.throws(() => liteServer.inject({ path: '/x', status: 503, phase: 'response' }), /不支持字段/, '阶段字段已由注入入口本身表达');
+      assert.throws(() => liteServer.t_inject({ path: '/x', status: 503, phase: 'response' }), /不支持字段/, '阶段字段已由注入入口本身表达');
       return { first, second };
     },
   );
@@ -251,7 +313,7 @@ test('once 自毁与注入校验：只拦一次、2xx/phase/未 mock 注入拒�
   assert.equal(out.second.faulted, false, '真实回包不带故障标记');
   // 输入：unmock 后注入 503
   // 预期 7：未 mock 时注入拒绝
-  assert.throws(() => liteServer.inject({ status: 503 }), /先 mock/, '未设置内存实现时注入应拒绝');
+  assert.throws(() => liteServer.t_inject({ status: 503 }), /先 t_mock/, '未设置内存实现时注入应拒绝');
 });
 
 /** 场景：真实 socket 回灌管线与观测账本——真 TCP 流量回包来自真实 handler，账本按契约记录。 */
@@ -262,11 +324,11 @@ test('socket 前端：真 TCP GET/POST 回灌管线、账本契约、缓存头�
     const asset = await realGet(port, '/style.css');
     const post = await realPost(port, '/api/echo', '载荷');
     // 账本断言须在 run 内完成：withBoard 收尾 unmock 后账本随实例丢弃
-    const recs = liteServer.requests().filter((r) => r.path === '/api/echo' || r.path === '/style.css');
+    const recs = liteServer.t_requests().filter((r) => r.path === '/api/echo' || r.path === '/style.css');
     assert.equal(liteServer.liveRequests, undefined, '活账本不应作为公共方法导出');
-    const snapshot = liteServer.requests();
-    liteServer.resetRequests(); // 须在 run 内清空：unmock 后无内存账本
-    return { api, asset, post, port, recs, snapshotLength: snapshot.length, clearedLength: liteServer.requests().length };
+    const snapshot = liteServer.t_requests();
+    liteServer.t_resetRequests(); // 须在 run 内清空：unmock 后无内存账本
+    return { api, asset, post, port, recs, snapshotLength: snapshot.length, clearedLength: liteServer.t_requests().length };
   });
   // 预期 1：真实 socket 请求应答真实 handler 的 200
   assert.equal(out.api.status, 200, '真实 socket 请求应答真实 handler 的 200');
@@ -306,16 +368,16 @@ test('socket 前端：真 TCP GET/POST 回灌管线、账本契约、缓存头�
 test('socket 故障：传输层 503/服务端闸门对真 socket 生效、账本 serverResponse 区分', async () => {
   // 输入：注入传输层 503（once）后真 socket 两次请求；再注入服务端 wait 闸门，观察早退与放行
   const out = await withBoard(boardHandler, async (port) => {
-    liteHttp.inject({ method: 'GET', path: '/api/echo', status: 503, body: { error: '传输不可用' }, once: true });
+    liteHttp.t_inject({ method: 'GET', path: '/api/echo', status: 503, body: { error: '传输不可用' }, once: true });
     const faulted = await realGet(port, '/api/echo');
     const recovered = await realGet(port, '/api/echo');
     const gate = Promise.withResolvers();
-    liteServer.inject({ method: 'GET', path: '/style.css', wait: gate.promise });
+    liteServer.t_inject({ method: 'GET', path: '/style.css', wait: gate.promise });
     const held = realGet(port, '/style.css');
     const early = await Promise.race([held, sleep(200).then(() => ({ held: true }))]);
     gate.resolve();
     const released = await held;
-    const recs = liteServer.requests();
+    const recs = liteServer.t_requests();
     return { faulted, recovered, early, released, recs };
   });
   // 预期 1：传输层故障替换真 socket 回包
@@ -350,14 +412,14 @@ test('socket 中断：弃连联动取消投递、账本停在 status 0、服务�
   // 输入：闸门挂起期间真 socket 客户端 50ms 后弃连，放行闸门再发起后续请求
   const out = await withBoard(boardHandler, async (port) => {
     const gate = Promise.withResolvers();
-    liteServer.inject({ method: 'GET', path: '/api/echo', wait: gate.promise });
+    liteServer.t_inject({ method: 'GET', path: '/api/echo', wait: gate.promise });
     const dropping = realGet(port, '/api/echo', { destroyAfter: 50 }).catch((error) => ({ code: error.code }));
     await sleep(150); // 等弃连传播到前端（res close → done → destroy 内存请求）
     const dropped = await dropping;
     gate.resolve();
     await sleep(50); // 放行后无投递（isAborted 短路）
     const after = await realGet(port, '/style.css');
-    const rec = liteServer.requests().find((r) => r.path === '/api/echo');
+    const rec = liteServer.t_requests().find((r) => r.path === '/api/echo');
     return { dropped, after, rec };
   });
   // 预期 1：弃连客户端见到连接错误而非回包
@@ -379,9 +441,9 @@ test('闸门失败：wait 拒绝按请求错误收场、连接拆除、账本不
   const out = await withBoard(boardHandler, async (port) => {
     const boom = Promise.reject(new Error('闸门崩溃'));
     boom.catch(() => {}); // 预挂兜底：注入期无请求消费不触发 unhandledRejection，真实 await 仍按拒绝传播
-    liteServer.inject({ method: 'GET', path: '/api/echo', wait: boom });
+    liteServer.t_inject({ method: 'GET', path: '/api/echo', wait: boom });
     const failed = await realGet(port, '/api/echo').catch((error) => ({ code: error.code }));
-    const rec = liteServer.requests().find((r) => r.path === '/api/echo');
+    const rec = liteServer.t_requests().find((r) => r.path === '/api/echo');
     return { failed, rec };
   });
   // 预期 1：闸门失败按请求错误收场（连接拆除）
@@ -395,17 +457,17 @@ test('闸门失败：wait 拒绝按请求错误收场、连接拆除、账本不
 /** 场景：防误用守卫——lite-server mock 但 lite-http 未 mock 时 socket 前端明确报错，不外联。 */
 test('防误用守卫：lite-http 未 mock 时 socket 前端 500 明确报错、无真实外联', async () => {
   // 输入：仅 mock lite-server 并监听（lite-http 全程未 mock），真 socket 请求
-  liteServer.mock();
+  liteServer.t_mock();
   const server = liteServer.createServer(boardHandler).listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   try {
     const refused = await realGet(server.port, '/api/echo');
     // 预期 1：收到 500 明确报错
     assert.equal(refused.status, 500, '未 mock lite-http 时 socket 前端应明确报错');
-    // 预期 2：报错指引先 liteHttp.mock()
-    assert.match(refused.body, /liteHttp\.mock/, '报错应指引先 liteHttp.mock()');
+    // 预期 2：报错指引先 liteHttp.t_mock()
+    assert.match(refused.body, /liteHttp\.t_mock/, '报错应指引先 liteHttp.t_mock()');
   } finally {
-    liteServer.unmock();
+    liteServer.t_unmock();
   }
   // 预期 3：本用例全程 lite-http 未 mock
   assert.equal(liteHttp.isMocked(), false, '本用例全程 lite-http 未 mock');
@@ -415,39 +477,39 @@ test('防误用守卫：lite-http 未 mock 时 socket 前端 500 明确报错、
 test('端口策略与关停：动态/显式口、unmock 关停拒连、未 mock 空态', async () => {
   // 输入：未 mock 时查询端口与账本
   // 预期 1：无绑定端口（null）
-  assert.equal(liteServer.port(), null, '未 mock 时无绑定端口');
+  assert.equal(liteServer.t_port(), null, '未 mock 时无绑定端口');
   // 预期 2：账本为空集
-  assert.deepEqual(liteServer.requests(), [], '未 mock 时账本为空集');
+  assert.deepEqual(liteServer.t_requests(), [], '未 mock 时账本为空集');
   // 输入：第一段会话——缺省 listen 动态空闲口
-  liteHttp.mock();
-  liteServer.mock();
+  liteHttp.t_mock();
+  liteServer.t_mock();
   const dynamic = liteServer.createServer(boardHandler);
   dynamic.listen(); // 缺省：动态空闲口
   await new Promise((resolve) => dynamic.once('listening', resolve));
   // 预期 3：动态口为非 0 的实际绑定值
-  assert.ok(Number.isInteger(liteServer.port()) && liteServer.port() > 0, '缺省 listen 应绑动态空闲口（非 0）');
+  assert.ok(Number.isInteger(liteServer.t_port()) && liteServer.t_port() > 0, '缺省 listen 应绑动态空闲口（非 0）');
   // 输入：真 socket 请求动态口
-  const dynamicHit = await realGet(liteServer.port(), '/style.css');
+  const dynamicHit = await realGet(liteServer.t_port(), '/style.css');
   // 预期 4：动态口真实可达
   assert.equal(dynamicHit.status, 200, '动态口真实可达');
-  liteServer.unmock();
-  liteHttp.unmock();
+  liteServer.t_unmock();
+  liteHttp.t_unmock();
   // 输入：第二段会话——显式端口绑定
   const explicit = await freePort();
-  liteHttp.mock();
-  liteServer.mock();
+  liteHttp.t_mock();
+  liteServer.t_mock();
   const pinned = liteServer.createServer(boardHandler).listen(explicit);
   await new Promise((resolve) => pinned.once('listening', resolve));
   // 预期 5：显式端口绑定该口
   assert.equal(pinned.port, explicit, '显式端口应绑定该口');
   // 预期 6：门面暴露实际绑定端口
-  assert.equal(liteServer.port(), explicit, '门面应暴露实际绑定端口');
+  assert.equal(liteServer.t_port(), explicit, '门面应暴露实际绑定端口');
   // 输入：真 socket 请求显式口
   const hit = await realGet(explicit, '/style.css');
   // 预期 7：显式口真实可达
   assert.equal(hit.status, 200, '显式口真实可达');
   // 输入：unmock 真实关停 socket，轮询直到拒连
-  liteServer.unmock(); // 真实关停 socket（关停为异步收尾：拆中的监听口短暂 RST，终态拒连）
+  liteServer.t_unmock(); // 真实关停 socket（关停为异步收尾：拆中的监听口短暂 RST，终态拒连）
   let refused = null;
   for (let i = 0; i < 20; i++) {
     refused = await new Promise((resolve) => {
@@ -459,22 +521,22 @@ test('端口策略与关停：动态/显式口、unmock 关停拒连、未 mock 
   }
   // 预期 8：unmock 后真实 socket 关停拒连
   assert.equal(refused.code, 'ECONNREFUSED', 'unmock 后真实 socket 应关停拒连');
-  liteHttp.unmock();
+  liteHttp.t_unmock();
 });
 
 /** 场景：未 listen 即 close——无 socket 可关时回调即时送达。 */
 test('未 listen 即 close：回调即时送达', async () => {
   // 输入：mock 后 createServer 不 listen 直接 close
-  liteHttp.mock();
-  liteServer.mock();
+  liteHttp.t_mock();
+  liteServer.t_mock();
   try {
     const server = liteServer.createServer(boardHandler);
     const closed = await new Promise((resolve) => server.close(() => resolve(true)));
     // 预期 1：close 回调即时送达
     assert.equal(closed, true, '未 listen 的 close 回调应即时送达');
   } finally {
-    liteServer.unmock();
-    liteHttp.unmock();
+    liteServer.t_unmock();
+    liteHttp.t_unmock();
   }
 });
 
@@ -486,7 +548,7 @@ test('URL 回灌：两层故障、Host 来源、方法、查询与 once 一致',
       for (const client of [liteHttp, http]) {
         const send = (path, extra = {}) => _urlInjectionRequest(client, { hostname: '127.0.0.1', port, path, headers: { Host: `public.test:${port}` }, ...extra });
         // 输入：socket 连接仍指向回环地址，注入 URL 使用原始 Host，并同时限定 POST 和查询串
-        injector.inject({ url: `http://public.test:${port}/same?a=1`, method: 'POST', status: 503, once: true });
+        injector.t_inject({ url: `http://public.test:${port}/same?a=1`, method: 'POST', status: 503, once: true });
         const misses = [await send('/same?a=2', { method: 'POST' }), await send('/same?a=1'),
           await send('/same?a=1', { method: 'POST', headers: { Host: `other.test:${port}` } })];
         // 预期 1：未命中的查询、方法与 Host 不消耗 once，直调与回灌结果一致
@@ -494,7 +556,7 @@ test('URL 回灌：两层故障、Host 来源、方法、查询与 once 一致',
         assert.equal((await send('/same?a=1', { method: 'POST' })).status, 503, '原始 Host 的完整 URL 应命中');
         assert.equal((await send('/same?a=1', { method: 'POST' })).status, 200, '命中后 once 应自毁');
         // 输入：路径 URL 不限定 origin，fragment 忽略，重复查询参数顺序精确
-        const remove = injector.inject({ url: '/same?x=1&x=2#ignored', status: 502 });
+        const remove = injector.t_inject({ url: '/same?x=1&x=2#ignored', status: 502 });
         // 预期 2：两条请求管线都保留路径 URL 的完整查询语义
         assert.equal((await send('/same?x=1&x=2')).status, 502, '路径 URL 应命中任意 Host');
         assert.equal((await send('/same?x=2&x=1')).status, 200, '查询参数顺序不能颠倒');
@@ -504,7 +566,7 @@ test('URL 回灌：两层故障、Host 来源、方法、查询与 once 一致',
     }
     // 预期 3：服务端非法 URL 在登记时拒绝
     for (const url of ['', 'relative', '//example.test/same', 'ftp://example.test/same', 1, {}])
-      assert.throws(() => liteServer.inject({ url, status: 503 }), /url/, '非法 URL 应在注入时拒绝');
+      assert.throws(() => liteServer.t_inject({ url, status: 503 }), /url/, '非法 URL 应在注入时拒绝');
   });
 });
 
@@ -514,14 +576,14 @@ test('URL 闸门：两层 wait 只挂目标、未命中直通、once 放行前�
     for (const injector of [liteHttp, liteServer]) {
       const gate = Promise.withResolvers();
       const send = path => _urlInjectionRequest(http, { hostname: '127.0.0.1', port, path });
-      injector.inject({ url: '/same?held=1', wait: gate.promise, once: true });
+      injector.t_inject({ url: '/same?held=1', wait: gate.promise, once: true });
       let settled = false;
       // 输入：真实 socket 请求命中路径 URL 闸门，另一个查询 URL 不命中
-      const before = liteServer.requests().length;
+      const before = liteServer.t_requests().length;
       const held = send('/same?held=1').then(out => { settled = true; return out; });
       try {
-        for (let i = 0; i < 100 && liteServer.requests().length === before; i++) await sleep(5);
-        assert.equal(liteServer.requests().length, before + 1, '目标请求应已进入回灌管线');
+        for (let i = 0; i < 100 && liteServer.t_requests().length === before; i++) await sleep(5);
+        assert.equal(liteServer.t_requests().length, before + 1, '目标请求应已进入回灌管线');
         // 预期 1：目标仍等待，未命中 URL 与第二次目标请求均不被 once 闸门挂住
         assert.equal(settled, false, '目标 URL 应等待闸门');
         assert.equal((await send('/same?held=2')).status, 200, '其他查询应直通');
@@ -549,4 +611,24 @@ test('异步 handler 失败：拒绝转为 500，后续请求仍成功', async (
     assert.equal(healthy.status, 200, '后续请求应正常响应');
     assert.equal(healthy.body, 'healthy', '后续回包应来自 handler');
   });
+});
+
+test('服务关闭故障闸门延迟关闭回调并可释放', async () => {
+  liteHttp.t_mock();
+  liteServer.t_mock();
+  let release;
+  const wait = new Promise(resolve => { release = resolve; });
+  try {
+    const server = liteServer.createServer((_req, res) => res.end('ok')).listen(0);
+    await new Promise(resolve => server.once('listening', resolve));
+    liteServer.t_inject({ operation: 'close', wait, once: true });
+    assert.equal((await get(server.port, '/')).status, 200, '关闭故障不得影响普通请求');
+    let closed = false;
+    const done = new Promise(resolve => server.close(() => { closed = true; resolve(); }));
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(closed, false, '闸门未释放前关闭回调应挂起');
+    release();
+    await done;
+    assert.equal(closed, true, '释放闸门后关闭应完成');
+  } finally { release(); liteServer.t_unmock(); liteHttp.t_unmock(); }
 });

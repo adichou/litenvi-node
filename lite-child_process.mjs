@@ -1,4 +1,4 @@
-// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；无前缀的接口允许所有调用方使用。
+// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；t_ 表示仅测试代码可引用或调用；无前缀的接口允许所有调用方使用。
 // lite-child_process：node:child_process 的 spawn、exec、execFile 及同步版本切换门面。
 // 默认转发真实 Node；mock 后经 mgr 解析并执行内存命令，全部调用统一记入 calls()，reset()
 // 只清账本。spawn 通过流与异步事件报告结果，启动失败发 error/close；spawnSync 按 encoding
@@ -378,7 +378,7 @@ const f_shellSyntaxFailure = error => ({ status: 2, stdout: '', stderr: `/bin/sh
 
 const f_shellCommand = {
     // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-    runSync(argv, ctx) {
+    pkg_runSync(argv, ctx) {
         try {
             const state = f_shellState(argv, ctx), stdout = [], stderr = [];
             let status = 0;
@@ -402,7 +402,7 @@ const f_shellCommand = {
         } catch (error) { return f_shellSyntaxFailure(error); }
     },
     // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-    run(argv, ctx, child) {
+    pkg_run(argv, ctx, child) {
         let cancelled = false, current, unread = Buffer.alloc(0);
         // 私有方法：仅在本文件实现中使用，不导出。
         const f_stop = () => { cancelled = true; current?.kill(); };
@@ -526,6 +526,7 @@ function f_createMemorySpawn() {
             return true;
         }
         if (['SIGCHLD', 'SIGWINCH', 'SIGURG'].includes(name)) return true;
+        if (name !== 'SIGKILL' && state.onSignal?.(name)) return true;
         state.pending.length = 0;
         state.terminating = true;
         queueMicrotask(() => f_finish(child, null, name));
@@ -640,7 +641,7 @@ function f_createMemorySpawn() {
             if (!children.has(child.pid) || state.terminating) return;
             try {
                 // 所有命令先领取一次故障；等待逻辑与命令是否提供异步实现无关。
-                const fault = cmd.pkg_takeFault();
+                const fault = cmd.pkg_takeFault(args);
                 if (fault) {
                     // 私有方法：仅在本文件实现中使用，不导出。
                     const f_fire = () => {
@@ -652,11 +653,12 @@ function f_createMemorySpawn() {
                     else f_fire();
                     return;
                 }
-                if (typeof cmd.pkg_impl.run === 'function') cmd.pkg_impl.run([...args], {
+                if (typeof cmd.pkg_impl.pkg_run === 'function') cmd.pkg_impl.pkg_run([...args], {
                     ...pkg_commandContext(contextOptions),
                     onDispose: cleanup => { state.cleanups.add(cleanup); },
+                    onSignal: handler => { state.onSignal = handler; },
                 }, io);
-                else if (typeof cmd.pkg_impl.runSync === 'function') {
+                else if (typeof cmd.pkg_impl.pkg_runSync === 'function') {
                     const result = cmd.pkg_runSync(args, pkg_commandContext(contextOptions), null);
                     if (result.stdout) io.stdout.write(result.stdout);
                     if (result.stderr) io.stderr.write(result.stderr);
@@ -679,7 +681,7 @@ function f_createMemorySpawn() {
         const input = f_inputBuffer(options.input, options.encoding);
         const contextOptions = { ...options, ...(cwd !== undefined || options.cwd === null ? { cwd } : {}) };
         const found = f_resolveCall(command, args, options, cwd, 'spawnSync');
-        if (found.error || typeof found.cmd.pkg_impl.runSync !== 'function') {
+        if (found.error || typeof found.cmd.pkg_impl.pkg_runSync !== 'function') {
             return { error: found.error || f_spawnError('spawnSync', command, args), status: null, signal: null,
                 output: null, pid: 0, stdout: undefined, stderr: undefined };
         }
@@ -744,11 +746,11 @@ const liteChildProcess = {
     // 外部方法：允许所有调用方使用，包括测试文件。
     execFileSync(...args) { return f_memory ? f_memory.execFileSync(...args) : realExecFileSync(...args); },
     // 设置内存实现；返回公共门面，不暴露私有运行态
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    mock() { f_memory ??= f_createMemorySpawn(); return liteChildProcess; },
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_mock() { f_memory ??= f_createMemorySpawn(); return liteChildProcess; },
     // 移除内存实现，回到真实 spawn；调用记录与在册子进程随实例一并丢弃
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    unmock() { f_memory?.f_dispose(); f_memory = null; },
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_unmock() { f_memory?.f_dispose(); f_memory = null; },
     // 等待子进程 close 并取终态 { code, signal }——真实与内存子进程同口径（一次性事件 →
     // 可 await 的值的收敛包装，替代消费侧手写 new Promise + on('close')）；spawn 失败
     //（error 事件，如命令不存在）按拒绝收场。先取 Promise 再触发动作，监听时序才有保证
@@ -763,26 +765,26 @@ const liteChildProcess = {
     // world 的信号投递；kill 命令与 liteProcess.kill 经此投递，测试通过公共 kill 入口触发）。
     // 与替身子进程对象的 child.kill(sig)（ChildProcess#kill 对应面）共用投递原语。
     // 落在本门面是因为 pid 登记表随子进程创建在此（mgr/lite-process 反向导入会成环）；
-    // 须先 mock()，返回是否送达
+    // 须先 t_mock()，返回是否送达
     // 内部方法：仅限同一 package 内模块协作，测试通过公共入口验证。
     pkg_signal(pid, sig = 'SIGTERM') {
         if (!f_memory)
-            throw new Error('liteChildProcess.pkg_signal 需先 mock() 设置内存实现');
+            throw new Error('liteChildProcess.pkg_signal 需先 t_mock() 设置内存实现');
         return f_memory.f_signal(pid, sig);
     },
     // 调用历史（非执行历史）：spawn/spawnSync 调用按发生顺序入账——发生在边界，先于命令
-    // 解析；派发失败（命令未装卷/未注册，未执行）的调用同样在列；须先 mock()
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    calls() {
+    // 解析；派发失败（命令未装卷/未注册，未执行）的调用同样在列；须先 t_mock()
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_calls() {
         if (!f_memory)
-            throw new Error('liteChildProcess.calls 需先 mock() 设置内存实现');
+            throw new Error('liteChildProcess.t_calls 需先 t_mock() 设置内存实现');
         return f_memory.calls.map(call => ({ ...call, args: [...call.args], options: { ...call.options } }));
     },
     // 统一清空所有命令的调用账本；命令配置、在册子进程与 PID 序列均保留
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    reset() {
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_reset() {
         if (!f_memory)
-            throw new Error('liteChildProcess.reset 需先 mock() 设置内存实现');
+            throw new Error('liteChildProcess.t_reset 需先 t_mock() 设置内存实现');
         f_memory.calls.length = 0;
     },
 };

@@ -1,7 +1,8 @@
-// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；无前缀的接口允许所有调用方使用。
+// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；t_ 表示仅测试代码可引用或调用；无前缀的接口允许所有调用方使用。
 // lite-cmd-node：Node/npm 命令定义，执行入口统一经 lite-child_process。
 // 脚本经普通 import 在宿主内执行，不启动真实子进程，也不使用 VM 模块加载器。
 // AsyncLocalStorage 将 process、console、定时器及文件/服务调用路由到当前虚拟命令；
+// spawn 输入运行期暂存为 fd 0（lite-fs 管道型记录），脚本内 fs.readFileSync(0) 同步可读。
 // 入口 URL 带运行序号以重新执行入口，依赖保持原生 import 缓存与共享全局语义。
 import path from 'node:path';
 import realFs from 'node:fs';
@@ -16,7 +17,7 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import tls from 'node:tls';
-import liteFs from './lite-fs.mjs';
+import liteFs, { pkg_stageStdin, pkg_releaseStdin } from './lite-fs.mjs';
 import liteServer from './lite-server.mjs';
 import liteChildProcess from './lite-child_process.mjs';
 import { pkg_ProcessExitError } from './lite-cmd-mgr.mjs';
@@ -29,6 +30,10 @@ const f_hostTimers = { ...timers };
 const f_hostFs = { ...realFs };
 // 私有方法：仅在本文件实现中使用，不导出。
 const f_currentRuntime = () => { const runtime = f_execution.getStore(); return runtime?.finished ? undefined : runtime; };
+
+// 内部方法：供进程门面读取当前命令的 argv，与原生 process 的运行时视图同源。
+export function pkg_currentArgv() { return f_currentRuntime()?.proc.argv; }
+
 const f_hostProcess = process;
 const f_active = new Set();
 let f_restoreBoundaries, f_sequence = 0;
@@ -43,7 +48,7 @@ function f_installBoundaries() {
         Object.defineProperty(owner, key, { configurable: true, enumerable: original?.enumerable ?? true, ...descriptor });
         return original;
     };
-    for (const key of ['argv', 'env', 'execPath', 'execArgv', 'pid', 'stdin', 'stdout', 'stderr', 'cwd', 'exit']) {
+    for (const key of ['argv', 'env', 'execPath', 'execArgv', 'pid', 'stdin', 'stdout', 'stderr', 'cwd', 'exit', 'kill']) {
         const original = Object.getOwnPropertyDescriptor(f_hostProcess, key);
         f_replace(f_hostProcess, key, {
             // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
@@ -164,6 +169,10 @@ function f_runNode(plan, ctx, child) {
     const cwd = ctx.cwd();
     const inheritedExitCode = f_hostProcess.exitCode;
     const runtime = { finished: false };
+    // spawn 输入暂存为 fd 0：脚本内 fs.readFileSync(0) 同步读到 options.input 快照
+    //（异步 spawn 经 ctx.options.input、同步命令经 ctx.input；流式 stdin 语义仍由
+    // child.stdin 承担，暂存不消费流）。
+    pkg_stageStdin(ctx.input ?? ctx.options?.input);
     let mainDone = false, importing = false, check;
     const stdout = child.stdout, stderr = child.stderr;
     const console = new Console({ stdout, stderr, colorMode: false });
@@ -172,6 +181,13 @@ function f_runNode(plan, ctx, child) {
         env: { ...(ctx.options.env ?? ctx.env) }, execPath: ctx.execPath, execArgv: [],
         pid: child.pid, platform: f_hostProcess.platform, version: f_hostProcess.version, versions: f_hostProcess.versions,
         stdin: child.stdin, stdout, stderr, cwd: () => cwd, exitCode: undefined,
+        kill(pid, signal = 'SIGTERM') {
+            if (liteChildProcess.pkg_signal(pid, signal)) return true;
+            const error = new Error('kill ESRCH');
+            error.code = 'ESRCH';
+            error.syscall = 'kill';
+            throw error;
+        },
         // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
         exit(code = proc.exitCode ?? 0) { ctx.recordExit(code); throw new pkg_ProcessExitError(Number(code) & 255); },
     });
@@ -187,6 +203,7 @@ function f_runNode(plan, ctx, child) {
     // 私有方法：仅在本文件实现中使用，不导出。
     const f_dispose = () => {
         runtime.finished = true;
+        pkg_releaseStdin(); // 释放 fd 0 暂存，防跨运行残留串读
         f_hostTimers.clearImmediate(check);
         for (const handle of pending) { f_hostTimers.clearTimeout(handle); f_hostTimers.clearImmediate(handle); }
         pending.clear();
@@ -259,7 +276,12 @@ function f_runNode(plan, ctx, child) {
                 if (key === 'listen') servers.add(server);
                 if (key === 'close') {
                     const callback = args[0];
-                    args[0] = (...result) => { servers.delete(server); f_checkIdle(); callback?.(...result); };
+                    args[0] = (...result) => {
+                        if (runtime.finished) return;
+                        servers.delete(server);
+                        try { callback?.(...result); } catch (error) { f_fail(error); }
+                        f_checkIdle();
+                    };
                 }
                 const result = value.apply(target, args);
                 return result === target ? proxy : result;
@@ -278,6 +300,11 @@ function f_runNode(plan, ctx, child) {
     if (!f_restoreBoundaries) f_restoreBoundaries = f_execution.exit(f_installBoundaries);
     child.once('exit', f_dispose);
     ctx.onDispose?.(f_dispose);
+    ctx.onSignal?.(signal => {
+        if (!proc.listenerCount(signal)) return false;
+        f_execution.run(runtime, () => { try { proc.emit(signal, signal); } catch (error) { f_fail(error); } });
+        return true;
+    });
     const require = createRequire(pathToFileURL(plan.file || path.join(cwd, '[eval].js')));
     // 私有方法：仅在本文件实现中使用，不导出。
     const f_evaluate = code => {
@@ -313,7 +340,7 @@ function f_runNode(plan, ctx, child) {
 
 const f_nodeImpl = {
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    run(argv, ctx, child) {
+    pkg_run(argv, ctx, child) {
         const plan = f_invocation(argv, ctx);
         if (plan.kind === 'version') {
             child.stdout.write(`${process.version}\n`);
@@ -322,7 +349,7 @@ const f_nodeImpl = {
         } else f_runNode(plan, ctx, child);
     },
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    runSync(argv, ctx) {
+    pkg_runSync(argv, ctx) {
         if (f_invocation(argv, ctx).kind === 'version') return { status: 0, stdout: `${process.version}\n`, stderr: '' };
         return { status: 1, stdout: '', stderr: 'lite-cmd-node：node 入口的同步执行未实现（import 是异步的），请改用 spawn\n' };
     },
@@ -348,7 +375,7 @@ export const pkg_COMMANDS = {
     [pkg_NODE_COMMAND_PATH]: f_nodeImpl,
     '/mock-cmd/usr/local/bin/npm': {
         // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-        runSync(argv) {
+        pkg_runSync(argv) {
             if (argv[0] === '-v' || argv[0] === '--version') return { status: 0, stdout: `${f_installedNpmVersion()}\n`, stderr: '' };
             return { status: 1, stdout: '', stderr: 'lite-cmd-node：npm 该参数未实现内存语义\n' };
         },

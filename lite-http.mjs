@@ -1,7 +1,7 @@
-// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；无前缀的接口允许所有调用方使用。
+// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；t_ 表示仅测试代码可引用或调用；无前缀的接口允许所有调用方使用。
 // lite-http：node:http 的可切换门面（客户端面：request/get）。默认（未设置内存实现）原样
-// 转发真实 node:http，生产行为不变。mock() 设置内存实现（幂等：已设置时复用当前实例）、
-// unmock() 移除（规则随实例丢弃）。
+// 转发真实 node:http，生产行为不变。t_mock() 设置内存实现（幂等：已设置时复用当前实例）、
+// t_unmock() 移除（规则随实例丢弃）。
 // 内存实现不触网：对同端口的 loopback 请求经 lite-server 门面路由到真实 handler（拿到真实
 // 路由代码的正确回包；服务端登记与响应阶段故障归 lite-server）；传输层故障（inject）按
 // url/method/path（字符串精确或正则）/query 匹配——请求未达 handler 即被拦截应答错误，wait 闸门
@@ -110,7 +110,7 @@ function f_createMemoryHttp() {
                 if (aborted)
                     return;
                 // 私有方法：仅在本文件实现中使用，不导出。
-                const response = await liteServer.pkg_handle(port, { method, raw, url, payload, headers: config.headers, isAborted: () => aborted });
+                const response = await liteServer.pkg_handle(port, { method, raw, url, hostname, payload, headers: config.headers, isAborted: () => aborted });
                 if (response === null) {
                     req.emit('error', Object.assign(new Error(`connect ECONNREFUSED 127.0.0.1:${port}`), { code: 'ECONNREFUSED', syscall: 'connect', address: '127.0.0.1', port }));
                     f_close();
@@ -166,7 +166,7 @@ function f_createMemoryHttp() {
                 throw new Error('lite-http 注入仅允许错误状态 400–599 或 wait 闸门（不允许成功回包替换）');
             for (const key of Object.keys(fault))
                 if (!['url', 'method', 'path', 'query', 'status', 'body', 'error', 'wait', 'once'].includes(key))
-                    throw new Error(`lite-http 注入不支持字段：${key}（服务端回包阶段故障经 lite-server.inject 注入）`);
+                    throw new Error(`lite-http 注入不支持字段：${key}（服务端回包阶段故障经 lite-server.t_inject 注入）`);
             if (fault.url !== undefined) fault = { ...fault, url: f_normalizeFaultUrl(fault.url) };
             faults.push(fault);
             return () => {
@@ -186,20 +186,20 @@ const liteHttp = {
     // 外部方法：允许所有调用方使用，包括测试文件。
     get(...args) { return f_memory ? f_memory.get(...args) : http.get(...args); },
     // 设置内存 http 实现；返回公共门面，不暴露私有实现
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    mock() { f_memory ??= f_createMemoryHttp(); return liteHttp; },
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_mock() { f_memory ??= f_createMemoryHttp(); return liteHttp; },
     // 移除内存实现，回到真实 node:http；注入规则随实例一并丢弃
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    unmock() { f_memory = null; },
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_unmock() { f_memory = null; },
     // 内存实现是否已设置——lite-server socket 前端等回灌方据此防误用（未 mock 的
     // request 会真实外联，回环请求会自成环路）
     // 外部方法：允许所有调用方使用，包括测试文件。
     isMocked() { return f_memory !== null; },
-    // 向内存实现注入错误规则；须先 mock()，返回移除函数
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    inject(fault) {
+    // 向内存实现注入错误规则；须先 t_mock()，返回移除函数
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_inject(fault) {
         if (!f_memory)
-            throw new Error('lite-http.inject 需先 mock() 设置内存 http 实现');
+            throw new Error('lite-http.t_inject 需先 t_mock() 设置内存 http 实现');
         return f_memory.inject(fault);
     },
 };

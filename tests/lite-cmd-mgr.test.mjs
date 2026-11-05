@@ -10,7 +10,6 @@ import assert from 'node:assert/strict';
 import mgr from '../lite-cmd-mgr.mjs';
 import liteFs from '../lite-fs.mjs';
 import liteChildProcess from '../lite-child_process.mjs';
-let gitModule; // 冷启动登记用例中通过普通 import 加载，不创建第二份带查询参数的模块
 import * as nodeModule from '../lite-cmd-node.mjs';
 import * as osModule from '../lite-cmd-os.mjs';
 import * as processModule from '../lite-process.mjs';
@@ -24,39 +23,46 @@ const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));
 const TST_PATH = '/mock/bin/tst';
 let tstCommand;
 const tstImpl = {
-    run(_argv, _ctx, child) {
+    pkg_run(_argv, _ctx, child) {
         queueMicrotask(() => {
             child.stdout.emit('data', Buffer.from('tst-ok\n'));
             child.emit('exit', 0, null);
             child.emit('close', 0, null);
         });
     },
-    runSync() { return { status: 0, stdout: 'tst-ok\n', stderr: '' }; },
+    pkg_runSync() { return { status: 0, stdout: 'tst-ok\n', stderr: '' }; },
 };
 
 // 逐用例装配：内存卷 + spawn 边界（命令执行寻址须卷内 /mock-cmd 系统卷——惰性安装覆盖）
 function setup() {
-  liteFs.mock({ exclude: [EXCLUDED] });
-  liteChildProcess.mock();
-  tstCommand = mgr.defineUserCommand('tst', tstImpl);
+  liteFs.t_mock({ exclude: [EXCLUDED] });
+  liteChildProcess.t_mock();
+  tstCommand = mgr.t_defineUserCommand('tst', tstImpl);
   return () => {
-    liteChildProcess.unmock();
-    liteFs.unmock();
+    liteChildProcess.t_unmock();
+    liteFs.t_unmock();
   };
 }
 
-/** 场景：系统卷已安装后导入命令模块，导入登记即时补齐命令文件。 */
-test('晚定义落卷：导入 Git 模块后命令文件立即补齐并可执行', async () => {
+/** 场景：系统卷已安装后导入 Git 不登记，显式安装后补齐命令文件并执行真实内存 Git。 */
+test('晚安装落卷：导入 Git 无副作用，t_install 后命令可执行', async () => {
   const done = setup();
   try {
     // 输入：安装系统卷后首次导入 Git 命令模块
     assert.equal(liteChildProcess.spawnSync('/bin/echo', ['install']).status, 0, '公共执行入口应触发系统卷安装');
     assert.equal(mgr.command('git'), null, '导入前 Git 尚未登记');
     assert.equal(liteChildProcess.spawnSync('git').error?.code, 'ENOENT', '命令文件缺失时不可执行');
-    gitModule = await import('../lite-cmd-git.mjs');
-    // 预期：模块完成登记后即刻补文件，执行入口能找到 Git 实现
+    const { t_install } = await import('../lite-cmd-git.mjs');
+    assert.equal(mgr.command('git'), null, '仅导入 Git 不应登记命令');
+    assert.equal(liteFs.existsSync('/mock-cmd/usr/bin/git'), false, '仅导入 Git 不应创建命令文件');
+    assert.equal(liteChildProcess.spawnSync('git').error?.code, 'ENOENT', '导入后未显式安装仍不可执行');
+    t_install();
+    // 预期：显式安装即刻补齐命令文件，执行入口能找到 Git 实现
     assert.equal(liteFs.existsSync('/mock-cmd/usr/bin/git'), true, '晚登记应立即补齐命令文件');
-    assert.equal(liteChildProcess.spawnSync('git', ['--version']).error, undefined, '晚登记命令应可执行');
+    liteFs.mkdirSync('/mock/repo', { recursive: true });
+    const result = liteChildProcess.spawnSync('git', ['init', '-b', 'main'], { cwd: '/mock/repo', encoding: 'utf8' });
+    assert.equal(result.status, 0, `安装后 Git 应可初始化仓库：${result.stderr}`);
+    assert.equal(liteFs.readFileSync('/mock/repo/.git/HEAD', 'utf8'), 'ref: refs/heads/main\n', '应执行真实内存 Git 并写入 HEAD');
   } finally { done(); }
 });
 
@@ -71,21 +77,20 @@ test('方法隔离：公共接口、内部名称与私有实现边界', () => {
   assert.equal(processModule.commandContext, undefined, '命令上下文应使用内部导出名');
   assert.equal(processModule._commandContext, undefined, '旧内部前缀应移除');
   assert.ok(Object.keys(processModule).every(name => !name.startsWith('f_')), '文件私有绑定不应导出');
-  assert.deepEqual(Object.keys(gitModule), [], 'git 模块只负责导入登记，不导出执行条目');
   assert.ok(Object.keys(nodeModule).every(name => name.startsWith('pkg_')), 'node 的命令表与路径仅供内部协作');
   assert.ok(Object.keys(osModule).every(name => name.startsWith('pkg_')), 'os 的命令表仅供内部协作');
   // 预期：mock 返回公共门面，调用方不能经返回值取得私有实现
-  liteFs.mock({ exclude: [EXCLUDED] });
+  liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
-    assert.equal(liteFs.mock(), liteFs, 'fs mock 应返回公共门面');
-    assert.equal(liteChildProcess.mock(), liteChildProcess, 'child_process mock 应返回公共门面');
-    assert.equal(liteHttp.mock(), liteHttp, 'http mock 应返回公共门面');
-    assert.equal(liteServer.mock(), liteServer, 'server mock 应返回公共门面');
-    assert.equal(processModule.liteProcess.mock({ cwd: '/mock/interface' }), processModule.liteProcess, 'process mock 应返回公共门面');
+    assert.equal(liteFs.t_mock(), liteFs, 'fs mock 应返回公共门面');
+    assert.equal(liteChildProcess.t_mock(), liteChildProcess, 'child_process mock 应返回公共门面');
+    assert.equal(liteHttp.t_mock(), liteHttp, 'http mock 应返回公共门面');
+    assert.equal(liteServer.t_mock(), liteServer, 'server mock 应返回公共门面');
+    assert.equal(processModule.liteProcess.t_mock({ cwd: '/mock/interface' }), processModule.liteProcess, 'process mock 应返回公共门面');
     assert.equal(liteFs.fdInUse, undefined, '旧描述符管理名称不应暴露');
     assert.equal(liteFs.f_fdInUse, undefined, '文件私有描述符管理方法不应通过门面暴露');
   } finally {
-    processModule.liteProcess.unmock(); liteServer.unmock(); liteHttp.unmock(); liteChildProcess.unmock(); liteFs.unmock();
+    processModule.liteProcess.t_unmock(); liteServer.t_unmock(); liteHttp.t_unmock(); liteChildProcess.t_unmock(); liteFs.t_unmock();
   }
 });
 
@@ -95,8 +100,8 @@ test('接口约定：command 对象公开 inject/onRun，内部执行方法使�
   try {
     // 输入：按命令名取得配置句柄，不直接调用内部执行方法
     const command = mgr.command('tst');
-    assert.equal(typeof command.inject, 'function', '命令对象应公开 inject');
-    assert.equal(typeof command.onRun, 'function', '命令对象应公开 onRun');
+    assert.equal(typeof command.t_inject, 'function', '命令对象应公开 inject');
+    assert.equal(typeof command.t_onRun, 'function', '命令对象应公开 onRun');
     assert.equal(mgr.inject, undefined, 'mgr 不应再公开 inject');
     assert.equal(command.takeFault, undefined, '旧 takeFault 名称应移除');
     assert.equal(command.runSync, undefined, '旧句柄 runSync 名称应移除');
@@ -109,16 +114,69 @@ test('接口约定：command 对象公开 inject/onRun，内部执行方法使�
   } finally { done(); }
 });
 
+/** 场景：命令框架将检查点注入委托给命令实现，并隔离不支持检查点的命令。 */
+test('inject 支持命令定义的检查点', () => {
+  const done = setup();
+  try {
+    let callback;
+    const entry = mgr.t_defineUserCommand('checkpoint-test', {
+      pkg_injectCheckpoint(name, observer) {
+        assert.equal(name, 'execute');
+        callback = observer;
+        return () => { callback = undefined; };
+      },
+      pkg_runSync() { callback?.({ stage: 'execute' }); return { status: 0, stdout: '', stderr: '' }; },
+    });
+    const events = [];
+    const remove = entry.t_inject({ checkpoint: 'execute', once: true, onHit: event => events.push(event.stage) });
+    assert.equal(liteChildProcess.spawnSync('checkpoint-test').status, 0);
+    assert.equal(liteChildProcess.spawnSync('checkpoint-test').status, 0);
+    assert.deepEqual(events, ['execute'], '一次性检查点只应命中一次');
+    remove();
+    assert.throws(() => tstCommand.t_inject({ checkpoint: 'execute', onHit() {} }), /不支持检查点/, '不支持的命令应拒绝');
+  } finally { done(); }
+});
+
+/** 场景：所有命令实现使用包内执行名称，调用方经 child_process 执行同步和异步命令。 */
+test('命令执行协议：仅保留 pkg_run/pkg_runSync，经子进程公共入口分派', async () => {
+  const done = setup();
+  try {
+    for (const commandPath of mgr.t_defined()) {
+      const command = mgr.command(commandPath);
+      assert.equal(command.run, undefined, `${commandPath} 句柄不应公开 run`);
+      assert.equal(command.runSync, undefined, `${commandPath} 句柄不应公开 runSync`);
+      assert.equal(command.pkg_impl.run, undefined, `${commandPath} 实现不应保留 run`);
+      assert.equal(command.pkg_impl.runSync, undefined, `${commandPath} 实现不应保留 runSync`);
+      assert.ok(['pkg_run', 'pkg_runSync'].some(name => typeof command.pkg_impl[name] === 'function'), `${commandPath} 应声明包内执行方法`);
+    }
+
+    mgr.t_defineUserCommand('package-execution', {
+      pkg_run(_args, _ctx, child) {
+        child.stdout.write('async-package\n');
+        child.emit('exit', 0, null);
+        child.emit('close', 0, null);
+      },
+      pkg_runSync() { return { status: 0, stdout: 'sync-package\n' }; },
+    });
+    assert.equal(liteChildProcess.spawnSync('package-execution', [], { encoding: 'utf8' }).stdout, 'sync-package\n', '同步公共入口应分派包内实现');
+    const child = liteChildProcess.spawn('package-execution');
+    let stdout = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    assert.deepEqual(await liteChildProcess.waitForClose(child), { code: 0, signal: null }, '异步公共入口应正常退出');
+    assert.equal(stdout, 'async-package\n', '异步公共入口应分派包内实现');
+  } finally { done(); }
+});
+
 /** 场景：异步执行在等待前消费 once，持续故障保留至显式移除。 */
 test('故障领取：once 在闸门等待前消费，持续故障保留至移除', async () => {
   const done = setup();
   let release;
   try {
     // 输入：排入一次性等待与持续故障，通过 spawn 触发，不调用内部领取方法
-    const entry = mgr.defineUserCommand('take-fault-probe', { runSync() { return { status: 0 }; } });
+    const entry = mgr.t_defineUserCommand('take-fault-probe', { pkg_runSync() { return { status: 0 }; } });
     const gate = new Promise(resolve => { release = resolve; });
-    const removeOnce = entry.inject({ wait: gate, exit: 4, once: true });
-    const removePersistent = entry.inject({ exit: 5 });
+    const removeOnce = entry.t_inject({ wait: gate, exit: 4, once: true });
+    const removePersistent = entry.t_inject({ exit: 5 });
     const first = liteChildProcess.waitForClose(liteChildProcess.spawn('take-fault-probe'));
     await new Promise(resolve => queueMicrotask(resolve));
     // 预期 1：首个调用仍在等待时，后续调用已命中持续故障
@@ -138,12 +196,12 @@ test('命令登记：defined 含完整路径，command 按名称与路径返回�
   const done = setup();
   try {
     // 输入：setup 通过 defineUserCommand 登记专用命令
-    assert.ok(mgr.defined().includes(TST_PATH), '登记名单应含完整路径');
+    assert.ok(mgr.t_defined().includes(TST_PATH), '登记名单应含完整路径');
     assert.equal(mgr.command('tst'), tstCommand, '裸名应寻址到登记句柄');
     assert.equal(mgr.command(TST_PATH), tstCommand, '完整路径应寻址到登记句柄');
     // 预期：无效用户命令名与实现通过公共入口拒绝
-    assert.throws(() => mgr.defineUserCommand('/usr/local/bin/nope', { runSync() {} }), /裸命令名/, '带路径名称应拒绝');
-    assert.throws(() => mgr.defineUserCommand('nope2', null), /impl/, '非法 impl 应拒绝');
+    assert.throws(() => mgr.t_defineUserCommand('/usr/local/bin/nope', { pkg_runSync() {} }), /裸命令名/, '带路径名称应拒绝');
+    assert.throws(() => mgr.t_defineUserCommand('nope2', null), /impl/, '非法 impl 应拒绝');
   } finally { done(); }
 });
 
@@ -192,7 +250,7 @@ test('PATH 解析：用户命令优先，绝对路径映射与命名空间路径
     // 输入：先观察系统 echo，再登记同名用户命令
     const run = command => liteChildProcess.spawnSync(command, ['probe'], { encoding: 'utf8' });
     assert.equal(run('echo').stdout, 'probe\n', '裸名应找到系统命令');
-    mgr.defineUserCommand('echo', { runSync() { return { status: 0, stdout: 'user-first\n' }; } });
+    mgr.t_defineUserCommand('echo', { pkg_runSync() { return { status: 0, stdout: 'user-first\n' }; } });
     // 预期：裸名命中用户命令，显式系统路径仍运行系统实现
     assert.equal(run('echo').stdout, 'user-first\n', '用户命令应优先');
     assert.equal(run('/bin/echo').stdout, 'probe\n', '绝对路径应映射到系统卷');
@@ -230,8 +288,8 @@ test('系统卷持久：卷复位后 /mock-cmd 仍在、用户数据被清、命
     assert.equal(liteChildProcess.spawnSync('/bin/echo', ['install']).status, 0, '公共执行入口应触发系统卷安装');
     liteFs.mkdirSync('/mock/data', { recursive: true });
     liteFs.writeFileSync('/mock/data/x.txt', 'user');
-    liteFs.unmock();
-    liteFs.mock({ exclude: [EXCLUDED] });
+    liteFs.t_unmock();
+    liteFs.t_mock({ exclude: [EXCLUDED] });
     // 预期 1：/mock-cmd 命令文件跨卷复位存活（持久根语义——核心断言）
     assert.equal(liteFs.existsSync('/mock-cmd/usr/bin/git'), true, '/mock-cmd 应跨卷复位存活');
     // 预期 2：用户数据目录被清空（由世界自播种）
@@ -255,8 +313,8 @@ test('markPersistent：自定义持久根跨卷存活、缺席根保持缺席', 
     liteFs.mkdirSync('/keep/sub', { recursive: true });
     liteFs.writeFileSync('/keep/sub/f.txt', 'kept');
     liteFs.mkdirSync('/mock/data', { recursive: true });
-    liteFs.unmock();
-    liteFs.mock({ exclude: [EXCLUDED] });
+    liteFs.t_unmock();
+    liteFs.t_mock({ exclude: [EXCLUDED] });
     // 预期 1：持久根内容跨卷复位存活
     assert.equal(liteFs.readFileSync('/keep/sub/f.txt', 'utf8'), 'kept', '持久根内容应存活');
     // 预期 2：非持久根被清空
@@ -274,7 +332,7 @@ test('inject exit：同步面回包替换、异步面退出码替换', async () 
   let remove = null;
   try {
     // 输入：对试验命令注入 exit 故障后 spawnSync
-    remove = mgr.command('tst').inject({ exit: 5, stderr: 'boom\n' });
+    remove = mgr.command('tst').t_inject({ exit: 5, stderr: 'boom\n' });
     const sync = liteChildProcess.spawnSync('tst', [], { encoding: 'utf8' });
     // 预期 1：status 替换为注入的 exit
     assert.equal(sync.status, 5, 'status 应替换为注入的 exit');
@@ -308,7 +366,7 @@ test('inject wait：异步面闸门放行后收场、同步面直接回包', asy
     // 输入：注入 wait 闸门（未放行）故障后 spawn
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
-    remove = mgr.command('tst').inject({ wait: gate, exit: 4 });
+    remove = mgr.command('tst').t_inject({ wait: gate, exit: 4 });
     const child = liteChildProcess.spawn('tst', []);
     let closed = null;
     liteChildProcess.waitForClose(child).then((r) => { closed = r; });
@@ -335,7 +393,7 @@ test('inject once：命中即毁', () => {
   const done = setup();
   try {
     // 输入：注入 once 故障后连续两次 spawnSync
-    mgr.command('tst').inject({ exit: 7, once: true });
+    mgr.command('tst').t_inject({ exit: 7, once: true });
     const first = liteChildProcess.spawnSync('tst', [], { encoding: 'utf8' });
     const second = liteChildProcess.spawnSync('tst', [], { encoding: 'utf8' });
     // 预期 1：首次命中失败包
@@ -354,8 +412,8 @@ test('inject 句柄形态与命中顺序：command().inject、按注入序、移
   let removeA = null;
   try {
     // 输入：完整路径与裸名取得同一命令对象，依次注入 A、B（持续）
-    removeA = mgr.command(TST_PATH).inject({ exit: 5 });
-    const removeB = mgr.command('tst').inject({ exit: 8 });
+    removeA = mgr.command(TST_PATH).t_inject({ exit: 5 });
+    const removeB = mgr.command('tst').t_inject({ exit: 8 });
     const first = liteChildProcess.spawnSync('tst', []);
     // 预期 1：按注入序首条（A）命中
     assert.equal(first.status, 5, '首条注入应先命中');
@@ -382,19 +440,19 @@ test('inject 非法 fault：各非法形态逐一拒绝', () => {
   try {
     // 输入：逐个非法形态注入（exit 须 ≥1 或 wait 为 Promise——不允许成功回包替换）
     // 预期 1：空对象拒绝（exit 与 wait 均缺席）
-    assert.throws(() => mgr.command('tst').inject({}), /exit.*wait|wait.*exit/, '空对象应拒绝');
+    assert.throws(() => mgr.command('tst').t_inject({}), /exit.*wait|wait.*exit/, '空对象应拒绝');
     // 预期 2：exit 0 拒绝（不允许成功回包替换）
-    assert.throws(() => mgr.command('tst').inject({ exit: 0 }), /≥1/, 'exit 0 应拒绝');
+    assert.throws(() => mgr.command('tst').t_inject({ exit: 0 }), /≥1/, 'exit 0 应拒绝');
     // 预期 3：exit 负数拒绝
-    assert.throws(() => mgr.command('tst').inject({ exit: -2 }), /≥1/, 'exit 负数应拒绝');
+    assert.throws(() => mgr.command('tst').t_inject({ exit: -2 }), /≥1/, 'exit 负数应拒绝');
     // 预期 4：exit 非整数拒绝
-    assert.throws(() => mgr.command('tst').inject({ exit: 'x' }), /≥1/, 'exit 非整数应拒绝');
+    assert.throws(() => mgr.command('tst').t_inject({ exit: 'x' }), /≥1/, 'exit 非整数应拒绝');
     // 预期 5：wait 非 Promise 拒绝
-    assert.throws(() => mgr.command('tst').inject({ wait: 5 }), /Promise/, 'wait 非 Promise 应拒绝');
+    assert.throws(() => mgr.command('tst').t_inject({ wait: 5 }), /Promise/, 'wait 非 Promise 应拒绝');
     // 预期 6：stderr 非字符串拒绝
-    assert.throws(() => mgr.command('tst').inject({ exit: 3, stderr: 5 }), /stderr/, 'stderr 非字符串应拒绝');
+    assert.throws(() => mgr.command('tst').t_inject({ exit: 3, stderr: 5 }), /stderr/, 'stderr 非字符串应拒绝');
     // 预期 7：非对象拒绝
-    assert.throws(() => mgr.command('tst').inject(null), /fault/, 'null 应拒绝');
+    assert.throws(() => mgr.command('tst').t_inject(null), /fault/, 'null 应拒绝');
     // 预期 8：未登记命令返回 null，没有可用于注入的命令对象
     assert.equal(mgr.command('no-such-cmd'), null, '未登记命令不应返回配置对象');
   } finally {
@@ -407,8 +465,8 @@ test('register：用户级临时命令可执行、遮蔽系统同名、卷复位
   // 输入：建卷（setup 统一 mock lite-fs + lite-child_process）后注册用户级 hello 与遮蔽系统的 node
   const done = setup();
   try {
-    mgr.defineUserCommand('hello', { runSync: () => ({ status: 0, stdout: 'hi from user\n' }) });
-    const shadow = mgr.defineUserCommand('node', { runSync: () => ({ status: 0, stdout: 'shadowed\n' }) });
+    mgr.t_defineUserCommand('hello', { pkg_runSync: () => ({ status: 0, stdout: 'hi from user\n' }) });
+    const shadow = mgr.t_defineUserCommand('node', { pkg_runSync: () => ({ status: 0, stdout: 'shadowed\n' }) });
     const hello = liteChildProcess.spawnSync('hello', [], { encoding: 'utf8' });
     // 预期 1：用户级命令经 PATH 解析可执行
     assert.equal(hello.status, 0, '用户级命令应可执行');
@@ -422,8 +480,8 @@ test('register：用户级临时命令可执行、遮蔽系统同名、卷复位
     assert.equal(liteFs.existsSync('/mock/bin/hello'), true, '用户命令文件应落 /mock/bin');
     assert.equal(liteFs.existsSync('/mock-cmd/usr/local/bin/node'), true, '系统卷 node 文件不受影响');
     // 输入：卷复位（unmock+mock 重建用户数据域）
-    liteFs.unmock();
-    liteFs.mock({ exclude: [EXCLUDED] });
+    liteFs.t_unmock();
+    liteFs.t_mock({ exclude: [EXCLUDED] });
     // 预期 5：系统卷存活（node 恢复系统实现）
     const restored = liteChildProcess.spawnSync('node', ['-v'], { encoding: 'utf8' });
     assert.equal(restored.stdout.trim(), process.version, '卷复位后系统 node 应恢复（遮蔽解除）');
@@ -441,10 +499,10 @@ test('register：用户级临时命令可执行、遮蔽系统同名、卷复位
 test('register 校验：裸名/impl/先 mock lite-fs', async () => {
   // 输入：带路径的名字注册
   // 预期 1：拒绝（须裸命令名）
-  assert.throws(() => mgr.defineUserCommand('/mock/bin/x', {}), /裸命令名/, '带路径名应拒绝');
+  assert.throws(() => mgr.t_defineUserCommand('/mock/bin/x', {}), /裸命令名/, '带路径名应拒绝');
   // 输入：未 mock lite-fs 时注册
-  liteFs.unmock();
+  liteFs.t_unmock();
   // 预期 2：拒绝（命令文件落内存卷）
-  assert.throws(() => mgr.defineUserCommand('x', {}), /先 mock/, '未 mock lite-fs 应拒绝');
+  assert.throws(() => mgr.t_defineUserCommand('x', {}), /先 t_mock/, '未 mock lite-fs 应拒绝');
 });
 

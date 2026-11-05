@@ -1,7 +1,7 @@
-// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；无前缀的接口允许所有调用方使用。
-// lite-cmd-git：显式导入后在 mgr 注册 /mock-cmd/usr/bin/git。
+// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；t_ 表示仅测试代码可引用或调用；无前缀的接口允许所有调用方使用。
+// lite-cmd-git：导入不注册命令；测试须显式调用 t_install() 安装 /mock-cmd/usr/bin/git。
 // 命令均由 lite-child_process.spawn/spawnSync 派遣，调用账本与清理统一归该模块；
-// mgr.command('git').onRun 只负责配置脚本钩子。异步执行由子进程门面复用同步命令实现。
+// mgr.command('git').t_onRun 只负责配置脚本钩子。异步执行由子进程门面复用同步命令实现。
 // 本模块在 lite-fs 当前作用域维护仓库、提交 DAG、暂存区、引用与工作树，执行命令时不调用
 // 系统 Git。分支切换会更新工作树并检查覆盖冲突；标签、reset、revert、cherry-pick、merge、
 // stash 与 worktree 更新对应状态。无远端 fetch --all 成功，不可访问远端的传输命令失败。
@@ -15,6 +15,35 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import mgr from './lite-cmd-mgr.mjs';
 import fs from './lite-fs.mjs';
+
+const f_statusObservers = new Set();
+
+// 注册同步扫描检查点；回调可重入内存命令，移除函数用于隔离用例。
+export function pkg_onStatusScan(observer) {
+    if (typeof observer !== 'function') throw new TypeError('状态扫描检查点须为函数');
+    f_statusObservers.add(observer);
+    return () => f_statusObservers.delete(observer);
+}
+
+// Git 只读扫描的可选锁是尽力获取：已有锁时仍允许读取，写入则必须获得独占锁。
+function f_withIndexLock(repo, optional, run) {
+    const lockPath = path.join(repo.localDir, 'index.lock');
+    let fd;
+    try {
+        fd = fs.openSync(lockPath, 'wx');
+    } catch (error) {
+        if (error?.code !== 'EEXIST') throw error;
+        if (!optional) return f_fatal(`Unable to create '${lockPath}': File exists.`);
+    }
+    try {
+        return run({ lockPath, lockAcquired: fd !== undefined });
+    } finally {
+        if (fd !== undefined) {
+            fs.closeSync(fd);
+            fs.unlinkSync(lockPath);
+        }
+    }
+}
 
 // ---------- 仓库与对象模型 ----------
 
@@ -89,10 +118,15 @@ function f_readObject(repo, hash, wantType) {
 
 // ---------- 引用与 HEAD ----------
 
-const f_REF_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+const f_INVALID_REF_NAME_RE = /[\x00-\x20\x7f~^:?*[\]\\]/;
 // 私有方法：仅在本文件实现中使用，不导出。
-const f_validRefName = (name) => f_REF_NAME_RE.test(name)
-    && !name.includes('..') && !name.includes('//') && !name.endsWith('.lock');
+const f_validRefName = (name) => typeof name === 'string' && name.length > 0
+    && !name.startsWith('-') && !f_INVALID_REF_NAME_RE.test(name)
+    && !name.includes('..') && !name.includes('@{') && !name.endsWith('.')
+    && name.split('/').every(part => part.length > 0 && !part.startsWith('.') && !part.endsWith('.lock'));
+
+// 私有方法：引用按 UTF-8 字节排序，与 Git 的 refname 顺序一致，不使用系统语言排序。
+const f_compareRefNames = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_readRef(repo, branch) {
@@ -111,7 +145,7 @@ function f_listBranches(repo) {
     // 私有方法：仅在本文件实现中使用，不导出。
     const f_walk = (rel) => {
         let entries = [];
-        try { entries = fs.readdirSync(path.join(repo.gitDir, 'refs', 'heads', ...rel)); } catch { return; }
+        try { entries = fs.readdirSync(path.join(repo.gitDir, 'refs', 'heads', rel)); } catch { return; }
         for (const name of entries) {
             const r = rel.length ? `${rel}/${name}` : name;
             let st = null;
@@ -120,8 +154,8 @@ function f_listBranches(repo) {
             else names.push(r);
         }
     };
-    f_walk([]);
-    return names.sort();
+    f_walk('');
+    return names.sort(f_compareRefNames);
 }
 
 // 私有方法：仅在本文件实现中使用，不导出。
@@ -472,6 +506,11 @@ function f_cmdAdd(repo, args) {
     const pats = f_ignorePatterns(repo);
     // 私有方法：仅在本文件实现中使用，不导出。
     const files = f_listWorktree(repo).filter((p) => !f_isIgnored(pats, p));
+    for (const spec of paths) {
+        const exists = fs.existsSync(path.join(repo.root, spec));
+        if (!exists && !files.some(p => f_matchPathspec(spec, p)) && !Object.keys(index).some(p => f_matchPathspec(spec, p)))
+            return f_fatal(`pathspec '${spec}' did not match any files`);
+    }
     let dirty = false;
     for (const spec of paths) {
         // 私有方法：仅在本文件实现中使用，不导出。
@@ -489,6 +528,50 @@ function f_cmdAdd(repo, args) {
     }
     if (dirty) f_writeIndex(repo, index);
     return f_ok();
+}
+
+// rm [-q] [--] <paths…>：删除已跟踪且无未提交修改的文件，并将删除写入暂存区。
+function f_cmdRm(repo, args) {
+    const paths = [];
+    let quiet = false, recursive = false, optionsEnded = false;
+    for (const arg of args) {
+        if (!optionsEnded && arg === '--') { optionsEnded = true; continue; }
+        if (!optionsEnded && (arg === '-q' || arg === '--quiet')) { quiet = true; continue; }
+        if (!optionsEnded && arg === '-r') { recursive = true; continue; }
+        if (!optionsEnded && arg.startsWith('-')) return f_fatal(`unsupported rm option: ${arg}`);
+        paths.push(arg);
+    }
+    if (!paths.length) return f_fatal('No pathspec was given');
+    const index = f_readIndex(repo);
+    const head = f_headTree(repo);
+    const selected = new Set();
+    for (const spec of paths) {
+        const matches = Object.keys(index).filter(p => f_matchPathspec(spec, p));
+        if (!matches.length) return f_fatal(`pathspec '${spec}' did not match any files`);
+        if (!recursive && matches.some(p => p !== spec)) return f_fatal(`not removing '${spec}' recursively without -r`);
+        for (const p of matches) selected.add(p);
+    }
+    const localChanges = [], stagedChanges = [];
+    for (const p of selected) {
+        const content = f_readWorktreeFile(repo, p);
+        if (head[p] !== index[p]) stagedChanges.push(p);
+        else if (content !== null && f_sha1(content) !== index[p]) localChanges.push(p);
+    }
+    if (localChanges.length || stagedChanges.length) {
+        const message = (paths, detail) => {
+            if (!paths.length) return '';
+            const heading = paths.length === 1 ? 'file has' : 'files have';
+            return `error: the following ${heading} ${detail}:\n${paths.map(p => `    ${p}\n`).join('')}(use --cached to keep the file, or -f to force removal)\n`;
+        };
+        return { status: 1, stdout: '', stderr: message(localChanges, 'local modifications') + message(stagedChanges, 'changes staged in the index') };
+    }
+    for (const p of selected) {
+        const target = path.join(repo.root, ...p.split('/'));
+        if (fs.existsSync(target)) fs.unlinkSync(target);
+        delete index[p];
+    }
+    f_writeIndex(repo, index);
+    return f_ok(quiet ? '' : [...selected].map(p => `rm '${p}'\n`).join(''));
 }
 
 // commit [-q] [--only] -m <subject> [--] [paths…]：生成 tree + commit 并推进当前分支
@@ -645,7 +728,7 @@ function f_cmdLog(repo, args) {
     const out = [];
     page.forEach(({ sha, commit }, idx) => {
         out.push(fmt != null ? f_expandFormat(fmt, sha, commit) : `commit ${sha}`);
-        if (nameOnly) {
+        if (nameOnly && (commit.parents?.length || 0) < 2) {
             out.push('');
             out.push(...f_changedPaths(repo, sha, commit));
             if (idx < page.length - 1) out.push(''); // 记录间空行（对齐真实 --name-only 布局）
@@ -982,6 +1065,7 @@ function f_cmdDiffTree(repo, args) {
     const sha = f_resolveCommitish(repo, rev || 'HEAD');
     const commit = sha && f_readObject(repo, sha, 'commit');
     if (!commit) return f_fatal(`ambiguous argument '${rev}': unknown revision or path not in the working tree.`);
+    if ((commit.parents?.length || 0) > 1 && !args.includes('-m')) return f_ok();
     const paths = f_changedPaths(repo, sha, commit);
     return f_ok(paths.length ? `${paths.join('\n')}\n` : '');
 }
@@ -1078,7 +1162,7 @@ function f_allRefs(repo) {
         }
     };
     f_walk('refs');
-    return refs.sort((a, b) => a.name.localeCompare(b.name));
+    return refs.sort((a, b) => f_compareRefNames(a.name, b.name));
 }
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_cmdForEachRef(repo, args) {
@@ -1295,6 +1379,7 @@ function f_cmdTransport(repo, command, args) {
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_runGit(argv, options, ctx) {
     const config = new Map();
+    let optionalLocks = true;
     let cwd = options?.cwd || ctx.cwd();
     let rest = [...argv];
     // 全局选项：-c <k>=<v>、-C <dir>、--no-optional-locks 等只读加锁/分页前缀
@@ -1308,6 +1393,7 @@ function f_runGit(argv, options, ctx) {
             cwd = rest[1];
             rest = rest.slice(2);
         } else if (a === '--no-optional-locks' || a === '--no-pager' || a === '--literal-pathspecs') {
+            if (a === '--no-optional-locks') optionalLocks = false;
             rest = rest.slice(1);
         } else break;
     }
@@ -1320,9 +1406,20 @@ function f_runGit(argv, options, ctx) {
     if (gate) return gate;
     try {
         switch (cmd) {
-            case 'add': return f_cmdAdd(repo, args);
-            case 'commit': return f_cmdCommit(repo, args, config);
-            case 'status': return f_cmdStatus(repo, args);
+            case 'add': return f_withIndexLock(repo, false, () => f_cmdAdd(repo, args));
+            case 'rm': return f_withIndexLock(repo, false, () => f_cmdRm(repo, args));
+            case 'commit': return f_withIndexLock(repo, false, () => f_cmdCommit(repo, args, config));
+            case 'status': {
+                const scan = ({ lockPath, lockAcquired }) => {
+                    for (const observer of [...f_statusObservers]) {
+                        const result = observer({ cwd, root: repo.root, lockPath, lockAcquired, optionalLocks });
+                        if (result && typeof result.then === 'function') throw new TypeError('状态扫描检查点必须同步执行');
+                    }
+                    return f_cmdStatus(repo, args);
+                };
+                return optionalLocks ? f_withIndexLock(repo, true, scan)
+                    : scan({ lockPath: path.join(repo.localDir, 'index.lock'), lockAcquired: false });
+            }
             case 'log': return f_cmdLog(repo, args);
             case 'rev-parse': return f_cmdRevParse(repo, args);
             case 'rev-list': return f_cmdRevList(repo, args);
@@ -1359,11 +1456,18 @@ function f_runGit(argv, options, ctx) {
     }
 }
 
-// git 命令登记：只负责内置 mini-git 语义，调用账本与清理统一归 lite-child_process。
-// onRun 世界脚本钩子由 mgr 通用包裹（entry 级，签名 (call, runBuiltin)）
-mgr.pkg_defineCommand('/mock-cmd/usr/bin/git', {
-    // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    runSync(argv, ctx) {
-        return f_runGit(argv, ctx.options, ctx);
-    },
-});
+// 测试专用方法：显式安装 Git 命令；重复调用保留已有钩子与故障配置。
+export function t_install() {
+    if (mgr.command('/mock-cmd/usr/bin/git')) return;
+    mgr.pkg_defineCommand('/mock-cmd/usr/bin/git', {
+        // 内部方法：向命令注入框架提供 Git 扫描检查点，不作为公共命令入口。
+        pkg_injectCheckpoint(name, observer) {
+            if (name !== 'status-scan') throw new Error(`Git 不支持检查点：${name}`);
+            return pkg_onStatusScan(observer);
+        },
+        // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
+        pkg_runSync(argv, ctx) {
+            return f_runGit(argv, ctx.options, ctx);
+        },
+    });
+}

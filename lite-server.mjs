@@ -1,14 +1,14 @@
-// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；无前缀的接口允许所有调用方使用。
+// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；t_ 表示仅测试代码可引用或调用；无前缀的接口允许所有调用方使用。
 // lite-server：node:http 服务端面（createServer）的门面，机制与 lite-fs / lite-child_process 一致
 //——lite-http 只承载客户端（request/get + 传输层故障），本门面承载服务端。默认（未 mock）
-// 原样转发真实 http.createServer，生产行为不变。mock() 换内存实现：登记唯一内存服务，
+// 原样转发真实 http.createServer，生产行为不变。t_mock() 换内存实现：支持多个隔离服务，
 // listen 真实绑定 127.0.0.1（显式端口即绑该口，缺省 listen(0) 取动态空闲口）——浏览器等真实
 // 客户端经真实 loopback socket 到达 socket 前端；前端把每个到达的请求回灌进程内管线：
 // liteHttp.request（内存客户端，传输层故障对浏览器流量同样生效）→ f_handle()（服务端故障）
 // → 真实 handler，回包写回真实 socket——真实 socket 流量与进程内直调共用同一故障/观测
 // 管线（观测账本也记在前端，契约沿旧 lite-browser route 账本）。进程内直调 liteHttp.request
 // 仍走 f_handle() 内存路径，不经 socket。inject 注入服务端故障：handler 已执行，回包被 wait
-// 闸门挂起或按 status 错误回包替换——与 lite-http.inject（请求未达 handler 即被传输层拦截）
+// 闸门挂起或按 status 错误回包替换——与 lite-http.t_inject（请求未达 handler 即被传输层拦截）
 // 分层归属，phase 不再需要：注入入口本身即阶段。状态为模块级单例：同进程内经同一 specifier
 // 导入（含动态 import）共享。
 import http from 'node:http';
@@ -36,8 +36,7 @@ function f_createMemoryServer() {
     const forwarded = []; // socket 前端观测账本：{ method, path, query, body, status, response, serverResponse }
     // 私有方法：取得活请求账本；仅在本文件实现中使用，不导出。
     function f_liveRequests() { return forwarded; }
-    let server = null; // 内存服务：{ handler, listening, port }
-    let httpServer = null; // 真实 socket 载体（node:http 绑 127.0.0.1）；未 listen → null
+    const servers = new Set();
 
     // 服务端故障匹配面：url + method + path（字符串精确或正则）+ query（键值逐项比对搜索串）
     // 私有方法：仅在本文件实现中使用，不导出。
@@ -49,9 +48,11 @@ function f_createMemoryServer() {
     // 单次请求的完整服务端处理：合成 req/res → 真实 handler → 回包过服务端故障（wait 挂起、
     // status 替换）。isAborted 供客户端 destroy 联动取消（闸门放行后不再投递）。
     // 私有方法：仅在本文件实现中使用，不导出。
-    function f_handle(port, { method, raw, url, payload, headers: requestHeaders = {}, isAborted }) {
+    function f_handle(port, { method, raw, url, hostname, payload, headers: requestHeaders = {}, isAborted }) {
         return new Promise((resolve, reject) => {
-            if (!server?.listening || port !== server.port) {
+            const name = String(hostname || 'localhost').toLowerCase();
+            const server = [...servers].find(s => s.listening && port === s.port && (s.virtual ? s.host === name : ['localhost', '127.0.0.1', '::1'].includes(name)));
+            if (!server) {
                 resolve(null); // 无内存服务：客户端按 ECONNREFUSED 拒连
                 return;
             }
@@ -62,7 +63,7 @@ function f_createMemoryServer() {
             const host = Object.entries(requestHeaders).find(([name]) => name.toLowerCase() === 'host')?.[1];
             const requestUrl = url || new URL(raw, `http://${host || `127.0.0.1:${port}`}`);
             // 私有方法：仅在本文件实现中使用，不导出。
-            const matched = faults.filter(rule => f_matches(rule, method, target, search, requestUrl));
+            const matched = faults.filter(rule => !rule.operation && f_matches(rule, method, target, search, requestUrl));
             for (const fault of matched)
                 if (fault.once) { // once：命中即自毁（跨用例不泄漏；闸门期间到达的后续请求不再被拦）
                     const i = faults.indexOf(fault);
@@ -75,7 +76,7 @@ function f_createMemoryServer() {
             const serverReq = new EventEmitter();
             serverReq.method = method;
             serverReq.url = raw;
-            serverReq.headers = { host: `127.0.0.1:${port}`, ...Object.fromEntries(Object.entries(requestHeaders).map(([key, value]) => [key.toLowerCase(), value])) };
+            serverReq.headers = { host: requestUrl.host, ...Object.fromEntries(Object.entries(requestHeaders).map(([key, value]) => [key.toLowerCase(), value])) };
             serverReq.socket = { remoteAddress: '127.0.0.1' };
             const serverRes = new EventEmitter();
             serverRes.statusCode = 200;
@@ -174,7 +175,7 @@ function f_createMemoryServer() {
     // 计数）、完成时回填 status/response；socket 中断（客户端弃连）对应 isAborted——联动
     // destroy 内存请求，放行后不投递，记录停在 status 0（对齐旧 route.abort 观测）。
     // 私有方法：仅在本文件实现中使用，不导出。
-    function f_frontend(realReq, realRes) {
+    function f_frontend(realReq, realRes, server) {
         const chunks = [];
         let aborted = false, client = null; // client：lite-http 内存请求句柄
         // 私有方法：仅在本文件实现中使用，不导出。
@@ -196,7 +197,7 @@ function f_createMemoryServer() {
             };
             forwarded.push(rec);
             if (!liteHttp.isMocked()) { // 防误用：未 mock 的 liteHttp.request 会真实外联（回环自环）
-                const error = JSON.stringify({ error: 'lite-server socket 前端需先 liteHttp.mock()：回灌管线走内存客户端，未 mock 会真实外联' });
+                const error = JSON.stringify({ error: 'lite-server socket 前端需先 liteHttp.t_mock()：回灌管线走内存客户端，未 mock 会真实外联' });
                 realRes.writeHead(500, { 'content-type': 'application/json' });
                 realRes.end(error);
                 rec.status = 500;
@@ -240,16 +241,29 @@ function f_createMemoryServer() {
         f_handle,
         // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
         createServer(handler) {
-            server = Object.assign(new EventEmitter(), {
-                handler, listening: false, port: null,
+            let httpServer = null;
+            const server = Object.assign(new EventEmitter(), {
+                handler, listening: false, port: null, host: null, virtual: false,
                 // 外部方法：返回的服务句柄遵循原生 Server 协议，允许调用方和测试使用。
-                address() { return httpServer?.address() ?? null; },
+                address() { return this.virtual && this.listening ? { address: this.host, family: 'virtual', port: this.port } : httpServer?.address() ?? null; },
                 // 外部方法：返回的服务句柄遵循原生 Server 协议，允许调用方和测试使用。
                 listen(portArg, host, ready) {
                     const callback = typeof host === 'function' ? host : ready;
                     if (callback) this.once('listening', callback);
+                    if (portArg && typeof portArg === 'object' && portArg.virtual === true) {
+                        const name = String(portArg.host || '').toLowerCase();
+                        const port = Number(portArg.port);
+                        if (!name || !Number.isInteger(port) || port < 1 || port > 65535) throw new TypeError('虚拟服务必须指定有效域名和端口');
+                        if ([...servers].some(s => s !== this && s.listening && s.virtual && s.host === name && s.port === port)) {
+                            queueMicrotask(() => this.emit('error', Object.assign(new Error('地址已被占用'), { code: 'EADDRINUSE' })));
+                            return this;
+                        }
+                        this.host = name; this.port = port; this.virtual = true; this.listening = true;
+                        queueMicrotask(() => this.emit('listening'));
+                        return this;
+                    }
                     const want = Number(portArg);
-                    httpServer = http.createServer(f_frontend);
+                    httpServer = http.createServer((req, res) => f_frontend(req, res, server));
                     httpServer.on('error', error => this.emit('error', error));
                     httpServer.listen(Number.isFinite(want) ? want : 0, '127.0.0.1', () => {
                         this.port = httpServer.address().port;
@@ -262,17 +276,39 @@ function f_createMemoryServer() {
                 close(callback) {
                     this.listening = false;
                     if (callback) this.once('close', callback);
+                    if (this.virtual) {
+                        this.virtual = false;
+                        const faultIndex = faults.findIndex(fault => fault.operation === 'close');
+                        const fault = faultIndex < 0 ? null : faults[faultIndex];
+                        if (fault?.once) faults.splice(faultIndex, 1);
+                        queueMicrotask(() => { if (fault) fault.wait.then(() => this.emit('close'), () => this.emit('close')); else this.emit('close'); });
+                        return this;
+                    }
                     if (httpServer) {
+                        const faultIndex = faults.findIndex(fault => fault.operation === 'close');
+                        const fault = faultIndex < 0 ? null : faults[faultIndex];
+                        if (fault?.once) faults.splice(faultIndex, 1);
                         httpServer.closeIdleConnections?.();
-                        httpServer.close(() => this.emit('close'));
+                        httpServer.close(() => {
+                            if (fault) fault.wait.then(() => this.emit('close'), () => this.emit('close'));
+                            else this.emit('close');
+                        });
                     } else queueMicrotask(() => this.emit('close', Object.assign(new Error('Server is not running.'), { code: 'ERR_SERVER_NOT_RUNNING' })));
                     return this;
                 },
             });
+            server.pkg_dispose = () => { server.listening = false; if (httpServer) { httpServer.closeIdleConnections?.(); httpServer.closeAllConnections?.(); httpServer.close(); httpServer = null; } };
+            servers.add(server);
             return server;
         },
         // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
         inject(fault) {
+            if (fault?.operation === 'close') {
+                if (!(fault.wait instanceof Promise) || Object.keys(fault).some(key => !['operation', 'wait', 'once'].includes(key)))
+                    throw new Error('lite-server close 注入仅支持 wait 闸门和 once');
+                faults.push(fault);
+                return () => { const at = faults.indexOf(fault); if (at !== -1) faults.splice(at, 1); };
+            }
             const hasStatus = Number.isInteger(fault?.status) && fault.status >= 400 && fault.status <= 599;
             const hasWait = fault?.wait instanceof Promise;
             if (!hasStatus && !hasWait)
@@ -290,7 +326,7 @@ function f_createMemoryServer() {
         },
         // 实际绑定端口（未 listen → null）：动态端口世界由调用方从这里取源推 origin
         // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-        port() { return server?.port ?? null; },
+        port() { return [...servers].find(s => s.listening && !s.virtual)?.port ?? null; },
         // 对外只提供请求快照，活账本仅在本文件内管理。
         // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
         requests() { return [...f_liveRequests()]; },
@@ -299,11 +335,8 @@ function f_createMemoryServer() {
         // 真实关停 socket 载体（活跃连接一并断开——mock 拆除口径，非优雅关停）
         // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
         f_dispose() {
-            if (!httpServer) return;
-            httpServer.closeIdleConnections?.();
-            httpServer.closeAllConnections?.();
-            httpServer.close();
-            httpServer = null;
+            for (const server of servers) server.pkg_dispose();
+            servers.clear();
         },
     };
 }
@@ -315,34 +348,36 @@ const liteServer = {
     // 外部方法：允许所有调用方使用，包括测试文件。
     createServer(...args) { return f_memory ? f_memory.createServer(...args) : http.createServer(...args); },
     // 设置内存实现；返回公共门面，不暴露私有实现
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    mock() { f_memory ??= f_createMemoryServer(); return liteServer; },
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_mock() { f_memory ??= f_createMemoryServer(); return liteServer; },
+    // 外部方法：供调用方确认虚拟服务不会落到真实网络。
+    isMocked() { return f_memory !== null; },
     // 移除内存实现，回到真实 createServer；服务登记、故障与真实 socket 随实例一并关停丢弃
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    unmock() { if (f_memory) { f_memory.f_dispose(); f_memory = null; } },
-    // 门面间内部通道：lite-http 内存客户端（及 socket 前端回灌的请求）按端口路由进来。返回回包
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_unmock() { if (f_memory) { f_memory.f_dispose(); f_memory = null; } },
+    // 门面间内部通道：lite-http 内存客户端（及 socket 前端回灌的请求）按目标域名和端口路由。返回回包
     // { status, headers, body, faulted }；未 mock 或该端口无监听内存服务返回 null（客户端按
     // ECONNREFUSED 拒连——未 mock 即无内存服务，与真实世界无监听同语义）
     // 内部方法：仅限同一 package 内模块协作，测试通过公共入口验证。
     pkg_handle(port, ctx) {
         return f_memory ? f_memory.f_handle(port, ctx) : Promise.resolve(null);
     },
-    // 实际绑定端口（未 mock / 未 listen 为 null）
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    port() { return f_memory ? f_memory.port() : null; },
-    // 向内存服务注入服务端故障（handler 已执行后回包阶段）；须先 mock()，返回移除函数
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    inject(fault) {
+    // 首个在监听的回环服务端口（未 mock / 无回环服务为 null）
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_port() { return f_memory ? f_memory.port() : null; },
+    // 向内存服务注入服务端故障（handler 已执行后回包阶段）；须先 t_mock()，返回移除函数
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_inject(fault) {
         if (!f_memory)
-            throw new Error('lite-server.inject 需先 mock() 设置内存实现');
+            throw new Error('lite-server.t_inject 需先 t_mock() 设置内存实现');
         return f_memory.inject(fault);
     },
     // socket 前端观测账本快照：{ method, path, query, body, status, response, serverResponse }；
     // 未 mock 时空集
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    requests() { return f_memory ? f_memory.requests() : []; },
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    resetRequests() { if (f_memory) f_memory.resetRequests(); },
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_requests() { return f_memory ? f_memory.requests() : []; },
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_resetRequests() { if (f_memory) f_memory.resetRequests(); },
 };
 
 export default liteServer;

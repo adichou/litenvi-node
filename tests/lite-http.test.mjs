@@ -99,7 +99,7 @@ function probe(port, path = '/api/health') {
 /** 场景：相同 HTTP 请求分别由原生与内存客户端执行，核对请求/响应、字节和事件。 */
 test('真实 HTTP 对照：request/get、URL 重载、请求头、二进制正文与取消事件', async () => {
   const scenario = async memory => {
-    if (memory) { liteHttp.mock(); liteServer.mock(); }
+    if (memory) { liteHttp.t_mock(); liteServer.t_mock(); }
     const server = (memory ? liteServer : http).createServer(referenceHandler);
     server.listen(0, '127.0.0.1');
     await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
@@ -120,7 +120,7 @@ test('真实 HTTP 对照：request/get、URL 重载、请求头、二进制正�
       return responses;
     } finally {
       await new Promise(resolve => server.close(resolve));
-      if (memory) { liteHttp.unmock(); liteServer.unmock(); }
+      if (memory) { liteHttp.t_unmock(); liteServer.t_unmock(); }
     }
   };
   // 预期 1：应用层请求/响应字段、原始字节、回调顺序及 destroy(error) 事件与原生一致
@@ -141,9 +141,9 @@ test('默认真实实现：未 mock 时无人监听端口按真实 ECONNREFUSED 
 /** 场景：传输层故障注入——命中规则的请求收到注入的错误响应。 */
 test('注入 500：命中路径的探活收到 500 与错误正文', async () => {
   // 输入：mock 后对探活路径注入 500 故障
-  liteHttp.mock();
+  liteHttp.t_mock();
   try {
-    liteHttp.inject({ path: '/api/health', status: 500, error: '心跳接口不可达' });
+    liteHttp.t_inject({ path: '/api/health', status: 500, error: '心跳接口不可达' });
     const broken = await probe(8888);
     // 预期 1：探活判失败
     assert.equal(broken.ok, false, '注入 500 应判探活失败');
@@ -152,32 +152,32 @@ test('注入 500：命中路径的探活收到 500 与错误正文', async () =>
     // 预期 3：错误正文来自注入规则
     assert.equal(JSON.parse(broken.body).error, '心跳接口不可达', '错误正文应来自注入规则');
   } finally {
-    liteHttp.unmock();
+    liteHttp.t_unmock();
   }
 });
 
 /** 场景：规则未命中——无规则路径按拒连模拟接口无法访问。 */
 test('规则未命中：无规则路径按 ECONNREFUSED 拒连', async () => {
   // 输入：对 /api/health 注入规则后探活无规则的 /api/other
-  liteHttp.mock();
+  liteHttp.t_mock();
   try {
-    liteHttp.inject({ path: '/api/health', status: 500, error: '心跳接口不可达' });
+    liteHttp.t_inject({ path: '/api/health', status: 500, error: '心跳接口不可达' });
     const missed = await probe(8888, '/api/other');
     // 预期 1：探活失败
     assert.equal(missed.ok, false, '未命中路径应探活失败');
     // 预期 2：按 ECONNREFUSED 拒连
     assert.equal(missed.code, 'ECONNREFUSED', '未命中应按拒连模拟无法访问');
   } finally {
-    liteHttp.unmock();
+    liteHttp.t_unmock();
   }
 });
 
 /** 场景：get 简写——http.get 形状与 request 同口径受注入规则约束。 */
 test('get 简写：与 request 同口径命中注入 500', async () => {
   // 输入：注入 500 后经 liteHttp.get 发起请求
-  liteHttp.mock();
+  liteHttp.t_mock();
   try {
-    liteHttp.inject({ path: '/api/health', status: 500, error: '心跳接口不可达' });
+    liteHttp.t_inject({ path: '/api/health', status: 500, error: '心跳接口不可达' });
     const result = await new Promise((resolve) => {
       liteHttp.get({ hostname: '127.0.0.1', port: 8888, path: '/api/health' }, (res) => {
         let data = '';
@@ -190,31 +190,31 @@ test('get 简写：与 request 同口径命中注入 500', async () => {
     // 预期 2：错误正文来自注入规则
     assert.equal(JSON.parse(result.body).error, '心跳接口不可达', '错误正文应来自注入规则');
   } finally {
-    liteHttp.unmock();
+    liteHttp.t_unmock();
   }
 });
 
 /** 场景：非法注入与前置约束——2xx 成功回包替换拒绝、未 mock 即注入拒绝。 */
 test('非法注入与前置约束：2xx 拒绝、未 mock 即 inject 拒绝', async () => {
   // 输入：mock 后注入 200 成功回包
-  liteHttp.mock();
+  liteHttp.t_mock();
   try {
     // 预期 1：拒绝（仅允许错误状态 400–599）
-    assert.throws(() => liteHttp.inject({ path: '/api/health', status: 200, body: { ok: true } }), /400–599/, '不允许成功回包替换');
+    assert.throws(() => liteHttp.t_inject({ path: '/api/health', status: 200, body: { ok: true } }), /400–599/, '不允许成功回包替换');
   } finally {
-    liteHttp.unmock();
+    liteHttp.t_unmock();
   }
   // 输入：未 mock 状态下注入 500
   // 预期 2：拒绝并提示先 mock
-  assert.throws(() => liteHttp.inject({ path: '/api/health', status: 500 }), /先 mock/, '未设置内存实现时注入应拒绝');
+  assert.throws(() => liteHttp.t_inject({ path: '/api/health', status: 500 }), /先 t_mock/, '未设置内存实现时注入应拒绝');
 });
 
 /** 场景：移除函数——注入返回的移除函数撤规则后回到拒连，且幂等。 */
 test('移除函数：撤规则后回到拒连、重复调用幂等', async () => {
   // 输入：注入 500 后调用返回的移除函数（两次验证幂等）
-  liteHttp.mock();
+  liteHttp.t_mock();
   try {
-    const remove = liteHttp.inject({ path: '/api/health', status: 500 });
+    const remove = liteHttp.t_inject({ path: '/api/health', status: 500 });
     // 预期 1：移除前规则生效（500）
     assert.equal((await probe(8888)).status, 500, '移除前规则应生效');
     remove();
@@ -225,20 +225,20 @@ test('移除函数：撤规则后回到拒连、重复调用幂等', async () =>
     // 预期 3：回到 ECONNREFUSED 拒连
     assert.equal(refused.code, 'ECONNREFUSED', '未命中应按拒连模拟无法访问');
   } finally {
-    liteHttp.unmock();
+    liteHttp.t_unmock();
   }
 });
 
 /** 场景：幂等与恢复——重复 mock 复用既有规则，unmock 回真实 node:http。 */
 test('幂等与恢复：重复 mock 保留规则、unmock 回真实实现', async () => {
   // 输入：注入规则后重复 mock（幂等）、再 unmock 探活
-  liteHttp.mock();
-  liteHttp.inject({ path: '/api/health', status: 500 });
-  liteHttp.mock(); // 幂等：复用当前内存实现，不丢规则
+  liteHttp.t_mock();
+  liteHttp.t_inject({ path: '/api/health', status: 500 });
+  liteHttp.t_mock(); // 幂等：复用当前内存实现，不丢规则
   // 预期 1：重复 mock 不丢弃已注入规则
   assert.equal((await probe(8888)).status, 500, '重复 mock 不应丢弃已注入规则');
   // 输入：unmock 后探活无人监听端口
-  liteHttp.unmock();
+  liteHttp.t_unmock();
   const refused = await probe(1);
   // 预期 2：回到真实 node:http connect 语义
   assert.equal(refused.code, 'ECONNREFUSED', 'unmock 后应回到真实 node:http connect 语义');
@@ -261,8 +261,8 @@ export function _urlInjectionRequest(client, options) {
 
 /** 场景：URL 定向传输故障，来源、端口、完整查询串与方法分别隔离，未命中不消耗 once。 */
 test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离', async () => {
-  liteHttp.mock();
-  liteServer.mock();
+  liteHttp.t_mock();
+  liteServer.t_mock();
   let handled = 0;
   const server = liteServer.createServer((req, res) => { handled++; res.end('handler'); }).listen(0);
   await new Promise(resolve => server.once('listening', resolve));
@@ -270,7 +270,7 @@ test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离'
     const base = `http://localhost:${server.port}`;
     const send = (path, extra = {}) => _urlInjectionRequest(liteHttp, { hostname: 'localhost', port: server.port, path, ...extra });
     // 输入：规范化主机名和 fragment 的绝对 URL，同时限定 POST、旧 path/query 条件与 once
-    liteHttp.inject({ url: new URL(`${base.toUpperCase()}/same?a=1&b=2#ignored`), method: 'POST', path: '/same', query: { a: 1 }, status: 503, once: true });
+    liteHttp.t_inject({ url: new URL(`${base.toUpperCase()}/same?a=1&b=2#ignored`), method: 'POST', path: '/same', query: { a: 1 }, status: 503, once: true });
     const misses = [
       await send('/same?a=1&b=2'),
       await send('/same?b=2&a=1', { method: 'POST' }),
@@ -285,7 +285,7 @@ test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离'
     assert.equal(handled, 5, '传输故障应在 handler 前拦截');
     assert.equal((await send('/same?a=1&b=2', { method: 'POST' })).status, 200, 'once 后应恢复 handler');
     // 输入：路径 URL 跨来源生效，重复参数与顺序保留；删除后恢复真实响应
-    const remove = liteHttp.inject({ url: '/same?x=1&x=2#ignored', status: 502 });
+    const remove = liteHttp.t_inject({ url: '/same?x=1&x=2#ignored', status: 502 });
     // 预期 3：路径规则不限定来源，但严格比较完整查询串
     assert.equal((await send('/same?x=1&x=2', { hostname: 'other.test' })).status, 502, '路径 URL 应跨来源命中');
     assert.equal((await send('/same?x=2&x=1')).status, 200, '重复查询参数顺序不同不能命中');
@@ -293,14 +293,14 @@ test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离'
     remove(); remove();
     assert.equal((await send('/same?x=1&x=2')).status, 200, '移除 URL 规则应幂等恢复');
     // 输入：省略默认端口的 URL 规则，使用显式 80 端口与 fragment 的 URL 请求
-    liteHttp.inject({ url: 'http://EXAMPLE.test/default', status: 504 });
+    liteHttp.t_inject({ url: 'http://EXAMPLE.test/default', status: 504 });
     // 预期 4：默认端口和主机名规范化，fragment 不参与匹配
     assert.equal((await _urlInjectionRequest(liteHttp, new URL('http://example.test:80/default#ignored'))).status, 504, '默认端口、主机大小写和 fragment 应规范化');
-    liteHttp.inject({ url: new URL('https://example.test/default'), status: 504 });
+    liteHttp.t_inject({ url: new URL('https://example.test/default'), status: 504 });
     assert.equal((await _urlInjectionRequest(liteHttp, new URL('https://example.test:443/default'))).status, 504, 'HTTPS URL 对象应使用默认 443 端口匹配');
     assert.equal((await _urlInjectionRequest(liteHttp, 'https://example.test/default')).status, 504, 'HTTPS 字符串应与 URL 对象保持一致');
     // 预期 5：非法 URL 在登记时拒绝，不留给请求阶段报错
     for (const url of ['', 'relative', '//example.test/same', 'ftp://example.test/same', 1, {}])
-      assert.throws(() => liteHttp.inject({ url, status: 503 }), /url/, '非法 URL 应在注入时拒绝');
-  } finally { liteHttp.unmock(); liteServer.unmock(); }
+      assert.throws(() => liteHttp.t_inject({ url, status: 503 }), /url/, '非法 URL 应在注入时拒绝');
+  } finally { liteHttp.t_unmock(); liteServer.t_unmock(); }
 });

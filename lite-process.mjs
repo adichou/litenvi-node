@@ -1,7 +1,7 @@
-// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；无前缀的接口允许所有调用方使用。
+// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；t_ 表示仅测试代码可引用或调用；无前缀的接口允许所有调用方使用。
 // lite-process：process 替身门面（有 mock/unmock）——cwd/chdir/argv/env/pid/execPath/exit/
 // kill 的可切换门面。默认（未 mock）原样转发真实 process 对应能力，生产行为不变；
-// mock({ cwd?, argv?, env?, pid? }) 进入假世界，unmock() 回真实透传（原生 argv 恢复）。
+// mock({ cwd?, argv?, env?, pid? }) 进入假世界，t_unmock() 回真实透传（原生 argv 恢复）。
 // chdir/exit/kill 转调对应命令实现（经 lite-cmd-mgr 动态查询，命令集须由使用方导入
 // lite-cmd-os）：chdir → cd 命令（沿用目录校验，落点回写假世界 cwd）；exit → exit 命令
 //（ProcessExitError 语义：退出码记录在案、向上抛出，由调用方决定收场——不静默吞掉）；
@@ -9,9 +9,10 @@
 // 假世界取 node 命令实现路径（lite-cmd-node 常量 '/mock-cmd/usr/local/bin/node'），真实世界
 // 为 process.execPath。pid/platform/version 只读合理缺省（进程内执行：未显式给 pid 时与宿主
 // 同 pid，platform/version 与本机同源）。
-// 无 on/inject（事件与故障注入归命令模块——mgr.command(...).inject）。f_installArgv 为文件内私有方法：
+// 无 on/inject（事件与故障注入归命令模块——mgr.command(...).t_inject）。f_installArgv 为文件内私有方法：
 // 门面视图与原生 process.argv 同步替换、unmock 恢复原值；未 mock 场景 no-op（真实进程的
 // argv 不可伪造）。
+// Node 命令执行期间 argv 优先读取当前异步上下文，不改写父世界，避免并发命令参数串线。
 // 依赖方向（无环）：lite-process → lite-cmd-mgr（kill/exit/chdir 命令动态查询）+ lite-cmd-node
 //（execPath 常量）；命令注册表与模拟执行统一在 lite-cmd-mgr——lite-child_process 派遣命令
 // 实现时经 pkg_commandContext 把进程面能力（cwd/env/argv 安装/退出记录）以 ctx 传入，命令集
@@ -20,7 +21,7 @@ import path from 'node:path';
 import { constants } from 'node:os';
 import liteFs from './lite-fs.mjs';
 import mgr, { pkg_ProcessExitError as ProcessExitError } from './lite-cmd-mgr.mjs';
-import { pkg_NODE_COMMAND_PATH } from './lite-cmd-node.mjs';
+import { pkg_NODE_COMMAND_PATH, pkg_currentArgv } from './lite-cmd-node.mjs';
 
 // 外部类型：允许所有调用方识别和捕获虚拟退出意图，包括测试文件。
 export { ProcessExitError };
@@ -62,7 +63,7 @@ export const liteProcess = {
     chdir(dir) {
         if (!f_world) return process.chdir(dir);
         const cd = mgr.command('cd');
-        if (!cd || typeof cd.pkg_impl.runSync !== 'function')
+        if (!cd || typeof cd.pkg_impl.pkg_runSync !== 'function')
             throw new Error('liteProcess.chdir 假世界需要 cd 命令（导入 lite-cmd-os）');
         const result = cd.pkg_runSync([String(dir)], pkg_commandContext());
         if (result.status !== 0) {
@@ -81,7 +82,7 @@ export const liteProcess = {
         }
     },
     // 外部方法：允许所有调用方使用，包括测试文件。
-    get argv() { return f_world ? f_world.argv : process.argv; },
+    get argv() { return pkg_currentArgv() ?? (f_world ? f_world.argv : process.argv); },
     // 环境面（假世界可写对象：构造时给、运行中改；未显式给时与真实 process.env 单轨同源）
     // 外部方法：允许所有调用方使用，包括测试文件。
     get env() { return f_world ? f_world.env : process.env; },
@@ -101,19 +102,19 @@ export const liteProcess = {
     exit(code = 0) {
         if (!f_world) return process.exit(code);
         const exitCommand = mgr.command('exit');
-        if (!exitCommand || typeof exitCommand.pkg_impl.runSync !== 'function')
+        if (!exitCommand || typeof exitCommand.pkg_impl.pkg_runSync !== 'function')
             throw new Error('liteProcess.exit 假世界需要 exit 命令（导入 lite-cmd-os）');
         exitCommand.pkg_runSync([String(code)], pkg_commandContext()); // 上抛 ProcessExitError
     },
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    exitCodes() { return f_world ? [...f_world.exitCodes] : []; },
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_exitCodes() { return f_world ? [...f_world.exitCodes] : []; },
     // 信号投递经 kill 命令实现（lite-cmd-os → lite-child_process 的 signal 原语）：成功 true、
     // 无此进程按真实 process.kill 口径抛 ESRCH
     // 外部方法：允许所有调用方使用，包括测试文件。
     kill(pid, signal = 'SIGTERM') {
         if (!f_world) return process.kill(pid, signal);
         const killCommand = mgr.command('kill');
-        if (!killCommand || typeof killCommand.pkg_impl.runSync !== 'function')
+        if (!killCommand || typeof killCommand.pkg_impl.pkg_runSync !== 'function')
             throw new Error('liteProcess.kill 假世界需要 kill 命令（导入 lite-cmd-os）');
         const argv = typeof signal === 'number'
             ? [`-${signal}`, String(pid)]
@@ -131,11 +132,11 @@ export const liteProcess = {
     // 进入假世界：cwd 为初始当前目录（当前目录语义，chdir 后变化）；argv/env/pid 可选（缺省
     // argv 取原生 argv、env 与真实 process.env 单轨同源、pid 与宿主同值）。不建目录、不依赖
     // lite-fs。重复调用保留既有配置并返回公共门面
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    mock({ cwd, argv, env, pid } = {}) {
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_mock({ cwd, argv, env, pid } = {}) {
         if (f_world) return liteProcess;
         if (typeof cwd !== 'string' || !path.isAbsolute(cwd))
-            throw new Error('liteProcess.mock 需要 cwd（初始当前目录的绝对路径）');
+            throw new Error('liteProcess.t_mock 需要 cwd（初始当前目录的绝对路径）');
         f_world = {
             cwd: path.resolve(cwd),
             argv: [...(argv || process.argv)],
@@ -145,8 +146,8 @@ export const liteProcess = {
         };
         return liteProcess;
     },
-    // 外部方法：允许所有调用方使用，包括测试文件。
-    unmock() {
+    // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
+    t_unmock() {
         if (f_world?.argvOriginal) process.argv = f_world.argvOriginal; // 恢复原生 argv
         f_world = null;
     },

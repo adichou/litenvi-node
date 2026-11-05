@@ -1,4 +1,4 @@
-// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；无前缀的接口允许所有调用方使用。
+// 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；t_ 表示仅测试代码可引用或调用；无前缀的接口允许所有调用方使用。
 // lite-cmd-os：OS 命令集——open/ls/pwd/cwd/kill + 常用文件命令（mkdir/rm/cp/mv/cat/touch/
 // test，桥接 lite-fs）+ shell 内建 cd/exit，导入即向 lite-cmd-mgr 登记（/mock-cmd/ 命名空间：
 // open/kill 在 usr/bin，其余基础命令与内建在 bin）。本模块不再依赖 lite-process：进程面能力
@@ -23,9 +23,9 @@ import { pkg_ProcessExitError } from './lite-cmd-mgr.mjs';
 
 const f_openImpl = {
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    run(_argv, _ctx, child) { f_emitCli(child, { status: 0 }); }, // 桌面动作：无输出，正常退出
+    pkg_run(_argv, _ctx, child) { f_emitCli(child, { status: 0 }); }, // 桌面动作：无输出，正常退出
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    runSync() { return { status: 0, stdout: '', stderr: '' }; },
+    pkg_runSync() { return { status: 0, stdout: '', stderr: '' }; },
 };
 const f_osCommands = {};
 f_osCommands['/mock-cmd/usr/bin/open'] = f_openImpl;
@@ -49,7 +49,7 @@ const f_flagsOf = (argv) => argv.filter(a => String(a).startsWith('-') && a !== 
 // 私有方法：仅在本文件实现中使用，不导出。
 const f_operandsOf = (argv) => argv.filter(a => !String(a).startsWith('-'));
 
-// 命令实现统一入口：runSync(argv) → { status, stdout?, stderr? }
+// 命令实现统一入口：pkg_runSync(argv) → { status, stdout?, stderr? }
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_errorReason(error) {
     return { ENOENT: 'No such file or directory', EEXIST: 'File exists', ENOTDIR: 'Not a directory',
@@ -213,13 +213,13 @@ function f_runCat(argv, ctx, child) {
 for (const [name, impl] of Object.entries(f_fileCommands)) {
     f_osCommands[`/mock-cmd/bin/${name}`] = {
         // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-        run(argv, ctx, child) {
+        pkg_run(argv, ctx, child) {
             if (name === 'cat') f_runCat(argv, ctx, child);
             else f_emitCli(child, impl(argv, ctx));
         },
         // 回包统一补全 spawnSync utf8 形状（实现可只回部分字段）
         // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-        runSync(argv, ctx) { return { status: 0, stdout: '', stderr: '', ...impl(argv, ctx) }; },
+        pkg_runSync(argv, ctx) { return { status: 0, stdout: '', stderr: '', ...impl(argv, ctx) }; },
     };
 }
 
@@ -248,7 +248,7 @@ function f_killRunImpl(argv) {
 }
 f_osCommands['/mock-cmd/usr/bin/kill'] = {
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    run(argv, _ctx, child) {
+    pkg_run(argv, _ctx, child) {
         // 微任务延迟对齐真实子进程事件时序（同步 emit 会在调用方挂上监听前丢事件）；
         // 成功静默、失败回 stderr 与非零退出码（真实 kill 口径）
         queueMicrotask(() => {
@@ -259,14 +259,14 @@ f_osCommands['/mock-cmd/usr/bin/kill'] = {
         });
     },
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    runSync(argv) { return f_killRunImpl(argv); },
+    pkg_runSync(argv) { return f_killRunImpl(argv); },
 };
 
 f_osCommands['/mock-cmd/bin/ls'] = {
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    run(argv, ctx, child) { f_emitCli(child, this.runSync(argv, ctx)); },
+    pkg_run(argv, ctx, child) { f_emitCli(child, this.pkg_runSync(argv, ctx)); },
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    runSync(argv, ctx) {
+    pkg_runSync(argv, ctx) {
         // 私有方法：仅在本文件实现中使用，不导出。
         const target = argv.find(a => typeof a === 'string' && !String(a).startsWith('-')) || '.';
         try {
@@ -287,8 +287,8 @@ f_osCommands['/mock-cmd/bin/ls'] = {
 
 const f_pwdImpl = {
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    run(_argv, ctx, child) {
-        // 异步面回显同 runSync：微任务延迟对齐真实子进程事件时序（同步 emit 会在调用方挂上监听前丢事件）
+    pkg_run(_argv, ctx, child) {
+        // 异步面回显同 pkg_runSync：微任务延迟对齐真实子进程事件时序（同步 emit 会在调用方挂上监听前丢事件）
         queueMicrotask(() => {
             child.stdout.write(Buffer.from(`${ctx.cwd()}\n`));
             child.emit('exit', 0, null);
@@ -296,7 +296,7 @@ const f_pwdImpl = {
         });
     },
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    runSync(_argv, ctx) { return { status: 0, stdout: `${ctx.cwd()}\n`, stderr: '' }; },
+    pkg_runSync(_argv, ctx) { return { status: 0, stdout: `${ctx.cwd()}\n`, stderr: '' }; },
 };
 f_osCommands['/mock-cmd/bin/pwd'] = f_pwdImpl;
 f_osCommands['/mock-cmd/bin/cwd'] = f_pwdImpl;
@@ -309,7 +309,7 @@ function f_cdRunImpl(argv, ctx) {
     const dir = f_operandsOf(argv)[0];
     if (!dir) return { status: 1, stdout: '', stderr: 'usage: cd directory\n' };
     if (typeof ctx.setCwd !== 'function')
-        return { status: 1, stdout: '', stderr: `cd: ${dir}: 假世界外不可切换（liteProcess.mock 后生效）\n` };
+        return { status: 1, stdout: '', stderr: `cd: ${dir}: 假世界外不可切换（liteProcess.t_mock 后生效）\n` };
     const target = path.resolve(ctx.cwd(), String(dir));
     let st = null;
     try { st = liteFs.statSync(target); } catch { /* 不存在：按 No such file or directory 收场 */ }
@@ -320,9 +320,9 @@ function f_cdRunImpl(argv, ctx) {
 }
 f_osCommands['/mock-cmd/bin/cd'] = {
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    run(argv, ctx, child) { f_emitCli(child, f_cdRunImpl(argv, ctx)); },
+    pkg_run(argv, ctx, child) { f_emitCli(child, f_cdRunImpl(argv, ctx)); },
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    runSync(argv, ctx) { return f_cdRunImpl(argv, ctx); },
+    pkg_runSync(argv, ctx) { return f_cdRunImpl(argv, ctx); },
 };
 
 // exit（shell 内建）：同步面记录退出意图并上抛 pkg_ProcessExitError（liteProcess.exit 转调口径——
@@ -335,13 +335,13 @@ const f_exitCodeOf = (argv) => {
 };
 f_osCommands['/mock-cmd/bin/exit'] = {
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    run(argv, ctx, child) {
+    pkg_run(argv, ctx, child) {
         const code = f_exitCodeOf(argv);
         ctx.recordExit(code);
         f_emitCli(child, { status: code & 255 });
     },
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    runSync(argv, ctx) {
+    pkg_runSync(argv, ctx) {
         const code = f_exitCodeOf(argv);
         ctx.recordExit(code);
         throw new pkg_ProcessExitError(code & 255);

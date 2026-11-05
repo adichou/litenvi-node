@@ -23,14 +23,14 @@ const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));
 
 // 逐用例装配：内存卷 + spawn 边界 + 进程环境面（kill 透传与 cd 落点依赖）
 function setup(worldOptions = {}) {
-  liteFs.mock({ exclude: [EXCLUDED] });
+  liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/mock/project/sub', { recursive: true });
-  liteChildProcess.mock();
-  liteProcess.mock({ cwd: '/mock/project', ...worldOptions });
+  liteChildProcess.t_mock();
+  liteProcess.t_mock({ cwd: '/mock/project', ...worldOptions });
   return () => {
-    liteProcess.unmock();
-    liteChildProcess.unmock();
-    liteFs.unmock();
+    liteProcess.t_unmock();
+    liteChildProcess.t_unmock();
+    liteFs.t_unmock();
   };
 }
 
@@ -74,8 +74,8 @@ test('真实 Process 对照：cwd/chdir、argv/env、字段、信号与退出码
       liteFs.writeFileSync('/mock/process-reference/file', 'x');
       // 虚拟信号表以自有命令 PID 登记，替换 proc.pid 后探测同一个活动命令
       const target = liteChildProcess.spawn('node', ['-e', 'setInterval(() => {}, 1000)']);
-      liteProcess.unmock();
-      liteProcess.mock({ cwd: '/mock/process-reference', argv: [NODE_COMMAND_PATH, 'reference.mjs', '--flag'], pid: target.pid });
+      liteProcess.t_unmock();
+      liteProcess.t_mock({ cwd: '/mock/process-reference', argv: [NODE_COMMAND_PATH, 'reference.mjs', '--flag'], pid: target.pid });
       await new Promise(resolve => target.once('spawn', resolve));
       try {
         // 预期 1：目录变化、环境读写、字段与信号探测结果一致；pid/execPath 只核对对应语义
@@ -144,7 +144,7 @@ test('mock 幂等：重复调用返回既有世界；cwd 缺席/相对路径拒�
   const done = setup();
   try {
     // 输入：重复 mock（幂等口径）
-    const again = liteProcess.mock({ cwd: '/another' });
+    const again = liteProcess.t_mock({ cwd: '/another' });
     // 预期 1：返回既有世界（cwd 不被改写）
     assert.equal(liteProcess.cwd(), '/mock/project', '重复 mock 不应改写世界');
     assert.ok(again, 'mock 应返回世界对象');
@@ -153,9 +153,9 @@ test('mock 幂等：重复调用返回既有世界；cwd 缺席/相对路径拒�
   }
   // 输入：卸下世界后以非法入参 mock
   // 预期 2：cwd 缺席拒绝
-  assert.throws(() => liteProcess.mock({}), /cwd/, 'cwd 缺席应拒绝');
+  assert.throws(() => liteProcess.t_mock({}), /cwd/, 'cwd 缺席应拒绝');
   // 预期 3：相对路径拒绝
-  assert.throws(() => liteProcess.mock({ cwd: 'relative/dir' }), /绝对路径/, '相对路径应拒绝');
+  assert.throws(() => liteProcess.t_mock({ cwd: 'relative/dir' }), /绝对路径/, '相对路径应拒绝');
 });
 
 /** 场景：execPath 固定值——假世界取 node 命令实现路径（lite-cmd-node 常量），真实世界透传。 */
@@ -179,7 +179,7 @@ test('execPath：假世界为 node 命令实现路径、真实世界透传 proce
 test('unmock 恢复原生：各字段回真实透传', () => {
   const done = setup({ argv: ['node', 'x'], pid: 99 });
   try {
-    liteProcess.unmock();
+    liteProcess.t_unmock();
     // 输入：卸下假世界后读各字段
     // 预期 1：cwd 回 process.cwd()
     assert.equal(liteProcess.cwd(), process.cwd(), 'cwd 应回真实值');
@@ -190,7 +190,7 @@ test('unmock 恢复原生：各字段回真实透传', () => {
     // 预期 4：env 回 process.env
     assert.equal(liteProcess.env, process.env, 'env 应回真实值');
     // 预期 5：exitCodes 账本清空（世界已卸）
-    assert.deepEqual(liteProcess.exitCodes(), [], '卸下世界后账本应为空');
+    assert.deepEqual(liteProcess.t_exitCodes(), [], '卸下世界后账本应为空');
   } finally {
     done();
   }
@@ -232,7 +232,7 @@ test('exit→ProcessExitError：退出码入账上抛、账本按序累计', () 
     // 输入：再 exit()（缺省码 0）
     assert.throws(() => liteProcess.exit(), (e) => e.exitCode === 0, '缺省退出码应为 0');
     // 预期 2：账本按调用序累计
-    assert.deepEqual(liteProcess.exitCodes(), [3, 0], '退出码账本应按序累计');
+    assert.deepEqual(liteProcess.t_exitCodes(), [3, 0], '退出码账本应按序累计');
   } finally {
     done();
   }
@@ -271,8 +271,8 @@ test('命令上下文：argv 安装同步到门面与宿主，unmock 恢复', ()
   const done = setup();
   try {
     // 输入：假世界安装子进程口径 argv
-    mgr.defineUserCommand('argv-installer', {
-      runSync(_args, ctx) { ctx.installArgv([NODE_COMMAND_PATH, '/mock/project/entry.mjs', '--after']); return { status: 0 }; },
+    mgr.t_defineUserCommand('argv-installer', {
+      pkg_runSync(_args, ctx) { ctx.installArgv([NODE_COMMAND_PATH, '/mock/project/entry.mjs', '--after']); return { status: 0 }; },
     });
     assert.equal(liteChildProcess.spawnSync('argv-installer').status, 0, '命令上下文应能安装 argv');
     // 预期 1：门面视图为安装值
@@ -302,7 +302,7 @@ test('命令寻址口径：cd/exit 经 mgr 配置寻址（命令在即语义在�
     assert.equal(liteProcess.cwd(), '/mock/project/sub', 'chdir 不依赖系统卷已装');
     // 预期 2：exit 转调同口径（退出码入账并上抛）
     assert.throws(() => liteProcess.exit(2), ProcessExitError, 'exit 转调应同样可用');
-    assert.deepEqual(liteProcess.exitCodes(), [2], '退出码应入账');
+    assert.deepEqual(liteProcess.t_exitCodes(), [2], '退出码应入账');
   } finally {
     done();
   }

@@ -16,11 +16,11 @@ const selfFile = new URL(import.meta.url).pathname;
 const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));
 // 逐用例装配：内存卷（命令执行寻址依赖）+ spawn 边界
 function setup() {
-  liteFs.mock({ exclude: [EXCLUDED] });
-  liteChildProcess.mock();
+  liteFs.t_mock({ exclude: [EXCLUDED] });
+  liteChildProcess.t_mock();
   return () => {
-    liteChildProcess.unmock();
-    liteFs.unmock();
+    liteChildProcess.t_unmock();
+    liteFs.t_unmock();
   };
 }
 
@@ -161,15 +161,15 @@ test('真实 Node 对照：版本、脚本输出、argv/env、模块加载与退
   };
   try {
     const expected = await scenario(false);
-    liteFs.mock({ exclude: [EXCLUDED, root] });
-    liteChildProcess.mock();
+    liteFs.t_mock({ exclude: [EXCLUDED, root] });
+    liteChildProcess.t_mock();
     try {
       const actual = await scenario(true);
       // 预期 2：相同命令输入下，版本、输出、argv/env、重复加载及终态与真实 Node 一致
       assert.deepEqual(actual, expected, 'Node 命令实现应与真实 Node 的已测行为一致');
     } finally {
-      liteChildProcess.unmock();
-      liteFs.unmock();
+      liteChildProcess.t_unmock();
+      liteFs.t_unmock();
     }
   } finally {
     realFs.rmSync(temporary, { recursive: true, force: true });
@@ -243,7 +243,7 @@ test('嵌套命令：spawn/spawnSync 统一入账，未实现的 fork 明确失�
     assert.deepEqual(await liteChildProcess.waitForClose(child), { code: 0, signal: null }, '嵌套命令完成后父命令应正常退出');
     assert.equal(output, 'nested-sync\nfork-blocked true\nnested-async\n', '嵌套命令输出与 fork 边界应正确');
     // 预期 2：嵌套 echo 均记入内存运行账本
-    assert.deepEqual(liteChildProcess.calls().map(call => call.command), ['node', 'echo', 'echo'], '嵌套命令应通过内存分派');
+    assert.deepEqual(liteChildProcess.t_calls().map(call => call.command), ['node', 'echo', 'echo'], '嵌套命令应通过内存分派');
   } finally {
     done();
     realFs.unlinkSync(fixture);
@@ -254,9 +254,9 @@ test('嵌套命令：spawn/spawnSync 统一入账，未实现的 fork 明确失�
 test('导入即登记：node/npm 在 mgr 登记名单、node 命令路径为 execPath 常量', () => {
   // 输入：读 mgr 注册表自省名单
   // 预期 1：node 完整路径在名单
-  assert.ok(mgr.defined().includes(NODE_COMMAND_PATH), 'node 应在登记名单');
+  assert.ok(mgr.t_defined().includes(NODE_COMMAND_PATH), 'node 应在登记名单');
   // 预期 2：npm 完整路径在名单
-  assert.ok(mgr.defined().includes('/mock-cmd/usr/local/bin/npm'), 'npm 应在登记名单');
+  assert.ok(mgr.t_defined().includes('/mock-cmd/usr/local/bin/npm'), 'npm 应在登记名单');
   // 预期 3：裸名寻址到句柄
   assert.equal(mgr.command('node').path, NODE_COMMAND_PATH, '裸名 node 应寻址到命令句柄');
   // 预期 4：常量值为 /mock-cmd/usr/local/bin/node（lite-process 的 execPath 取此值）
@@ -288,14 +288,14 @@ test('版本探测：node -v 与 npm -v 同步回本机版本', () => {
 
 /** 场景：入口脚本执行——.mjs 入口执行真实源码，副作用/env/argv 均为子进程口径。 */
 test('入口脚本执行：真实源码、env 落位、argv 子进程口径、旗标剔除', async () => {
-  liteFs.mock({ exclude: [EXCLUDED] });
+  liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/mock/project', { recursive: true }); // fixture 副作用目录（卷内；缺失则入口写入 ENOENT）
-  liteProcess.mock({ cwd: '/mock/project' });
+  liteProcess.t_mock({ cwd: '/mock/project' });
   const fixture = writeFixture(`
 liteFs.writeFileSync('/mock/project/fixture-out.json', JSON.stringify({
   argv: process.argv.slice(1, 4), env: process.env.ATB_CMD_NODE_PROBE, url: import.meta.url,
 }));`);
-  liteChildProcess.mock();
+  liteChildProcess.t_mock();
   try {
     // 输入：spawn node（带入口前旗标 + 入口后参数 + 自定义 env）
     const child = liteChildProcess.spawn('node', ['--max-old-space-size=1', fixture, '--after'], {
@@ -316,18 +316,151 @@ liteFs.writeFileSync('/mock/project/fixture-out.json', JSON.stringify({
     // 预期 4：入口及其任务结束后正常退出
     assert.deepEqual(closed, { code: 0, signal: null }, '有限入口应正常退出');
   } finally {
-    liteChildProcess.unmock();
-    liteProcess.unmock();
-    liteFs.unmock();
+    liteChildProcess.t_unmock();
+    liteProcess.t_unmock();
+    liteFs.t_unmock();
+    realFs.unlinkSync(fixture);
+  }
+});
+
+/** 场景：假世界并发执行 Node 文件入口，argv 双视图一致、子进程互不串线且父世界保持原值。 */
+test('假世界文件入口：argv 双视图一致、并发隔离与父世界保持', async () => {
+  // 输入：父世界 argv 为 parent.mjs --parent，入口记录两条 argv 视图并等待 stdin 放行
+  const nativeArgv = process.argv;
+  const parentArgv = [NODE_COMMAND_PATH, '/mock/project/parent.mjs', '--parent'];
+  const processUrl = new URL('../lite-process.mjs', import.meta.url).href;
+  const fixture = writeFixture(`
+    import { liteProcess } from ${JSON.stringify(processUrl)};
+    const snapshot = () => ({ native: [...process.argv], facade: [...liteProcess.argv] });
+    const before = snapshot();
+    console.log('ready');
+    await new Promise(resolve => process.stdin.once('data', resolve));
+    console.log(JSON.stringify({ before, after: snapshot() }));
+  `);
+  const done = setup();
+  liteFs.mkdirSync('/mock/project', { recursive: true });
+  liteProcess.t_mock({ cwd: '/mock/project', argv: parentArgv });
+  const running = [];
+  const launch = tag => {
+    const child = liteChildProcess.spawn('node', ['--no-warnings', fixture, tag]);
+    const run = { child, stdout: '', stderr: '', closed: liteChildProcess.waitForClose(child) };
+    run.ready = new Promise((resolve, reject) => {
+      child.stdout.on('data', chunk => {
+        run.stdout += chunk;
+        if (run.stdout.startsWith('ready\n')) resolve();
+      });
+      child.stderr.on('data', chunk => { run.stderr += chunk; });
+      run.closed.then(() => {
+        if (!run.stdout.startsWith('ready\n')) reject(new Error(`入口 ${tag} 未就绪：${run.stderr}`));
+      }, reject);
+    });
+    running.push(run);
+    return run;
+  };
+  const parentSnapshot = () => ({ native: [...process.argv], facade: [...liteProcess.argv] });
+  try {
+    // 预期 1：启动前父世界 argv 与 mock 给定值一致
+    assert.deepEqual(liteProcess.argv, parentArgv, '启动前父世界 argv 应为给定值');
+    // 输入：先启动 A 并等待就绪，再启动 B；分别记录只有 A 和 A/B 同时运行时的父世界视图
+    const first = launch('A');
+    await first.ready;
+    const duringFirst = parentSnapshot();
+    const second = launch('B');
+    await second.ready;
+    const duringBoth = parentSnapshot();
+    // 输入：通过 stdin 先放行 B，保留 A 的等待状态
+    second.child.stdin.end('continue');
+    // 预期 2：B 在 A 仍等待时正常退出
+    assert.deepEqual(await second.closed, { code: 0, signal: null }, `入口 B 应正常退出：${second.stderr}`);
+    // 输入：B 退出后再通过 stdin 放行 A，使 A 重读自己的 argv
+    first.child.stdin.end('continue');
+    // 预期 3：A 恢复执行后正常退出
+    assert.deepEqual(await first.closed, { code: 0, signal: null }, `入口 A 应正常退出：${first.stderr}`);
+
+    const expectedChild = tag => {
+      const argv = [NODE_COMMAND_PATH, fixture, tag];
+      return { before: { native: argv, facade: argv }, after: { native: argv, facade: argv } };
+    };
+    const expectedParent = { native: [...nativeArgv], facade: parentArgv };
+    // 预期 4：入口等待前后的双视图均为各自参数，父世界运行中和结束后保持原值，宿主 argv 不变
+    assert.deepEqual({
+      first: JSON.parse(first.stdout.slice('ready\n'.length)),
+      second: JSON.parse(second.stdout.slice('ready\n'.length)),
+      duringFirst, duringBoth, after: parentSnapshot(),
+    }, {
+      first: expectedChild('A'), second: expectedChild('B'),
+      duringFirst: expectedParent, duringBoth: expectedParent, after: expectedParent,
+    }, '文件入口的 argv 双视图应随各自运行上下文隔离，不能覆盖父世界或其他子进程');
+  } finally {
+    for (const { child } of running) {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    }
+    await Promise.allSettled(running.map(run => run.closed));
+    done();
+    liteProcess.t_unmock();
+    process.argv = nativeArgv;
+    realFs.unlinkSync(fixture);
+  }
+});
+
+/** 场景：假世界文件入口异常退出或被终止后，父世界与宿主 argv 保持原值。 */
+test('假世界文件入口：异常退出与 kill 保持父世界 argv', async () => {
+  // 输入：入口先输出两条 argv 视图，收到 stdin 后抛错或显式退出；kill 场景保持等待
+  const nativeArgv = process.argv;
+  const parentArgv = [NODE_COMMAND_PATH, '/mock/project/parent.mjs', '--parent'];
+  const processUrl = new URL('../lite-process.mjs', import.meta.url).href;
+  const fixture = writeFixture(`
+    import { liteProcess } from ${JSON.stringify(processUrl)};
+    console.log(JSON.stringify({ native: process.argv, facade: liteProcess.argv }));
+    await new Promise(resolve => process.stdin.once('data', resolve));
+    if (process.argv[2] === 'throw') throw new Error('argv-entry-failure');
+    process.exit(7);
+  `);
+  const done = setup();
+  liteFs.mkdirSync('/mock/project', { recursive: true });
+  liteProcess.t_mock({ cwd: '/mock/project', argv: parentArgv });
+  let child;
+  try {
+    for (const mode of ['throw', 'exit', 'kill']) {
+      // 输入：分别执行抛错、显式退出与外部终止三个文件入口
+      child = liteChildProcess.spawn('node', [fixture, mode]);
+      const closed = liteChildProcess.waitForClose(child);
+      const output = await new Promise(resolve => child.stdout.once('data', chunk => resolve(String(chunk))));
+      let stderr = '';
+      child.stderr.on('data', chunk => { stderr += chunk; });
+      const argv = [NODE_COMMAND_PATH, fixture, mode];
+      // 预期 1：异常发生前，两条 argv 视图一致，父世界和宿主参数未被覆盖
+      assert.deepEqual(JSON.parse(output), { native: argv, facade: argv }, `${mode} 入口应读取自己的参数`);
+      assert.deepEqual(liteProcess.argv, parentArgv, `${mode} 运行期间父世界参数应保持原值`);
+      assert.equal(process.argv, nativeArgv, `${mode} 运行期间宿主 argv 引用应保持原值`);
+      // 输入：kill 场景直接终止，其余场景通过 stdin 放行入口
+      if (mode === 'kill') child.kill();
+      else child.stdin.end('continue');
+      // 预期 2：退出方式符合输入，退出后父世界和宿主参数保持原值
+      assert.deepEqual(await closed, mode === 'kill' ? { code: null, signal: 'SIGTERM' }
+        : { code: mode === 'throw' ? 1 : 7, signal: null }, `${mode} 应按对应方式退出`);
+      if (mode === 'throw') assert.match(stderr, /argv-entry-failure/, '入口异常应通过 stderr 报告');
+      assert.deepEqual(liteProcess.argv, parentArgv, `${mode} 结束后父世界参数应保持原值`);
+      assert.equal(process.argv, nativeArgv, `${mode} 结束后宿主 argv 引用应保持原值`);
+    }
+  } finally {
+    if (child?.exitCode === null && child.signalCode === null) {
+      const closed = liteChildProcess.waitForClose(child);
+      child.kill();
+      await closed;
+    }
+    done();
+    liteProcess.t_unmock();
+    process.argv = nativeArgv;
     realFs.unlinkSync(fixture);
   }
 });
 
 /** 场景：入口加载失败——顶层抛错的入口按子进程异常退出收场（stderr + exit 1）。 */
 test('入口加载失败：stderr 带错误信息、退出码 1', async () => {
-  liteFs.mock({ exclude: [EXCLUDED] });
+  liteFs.t_mock({ exclude: [EXCLUDED] });
   const fixture = writeFixture(`throw new Error('fixture-boom');`);
-  liteChildProcess.mock();
+  liteChildProcess.t_mock();
   try {
     // 输入：spawn node 加载必抛的入口
     const child = liteChildProcess.spawn('node', [fixture]);
@@ -338,8 +471,8 @@ test('入口加载失败：stderr 带错误信息、退出码 1', async () => {
     // 预期 2：退出码 1（子进程异常退出语义）
     assert.equal(code, 1, '加载失败应按退出码 1 收场');
   } finally {
-    liteChildProcess.unmock();
-    liteFs.unmock();
+    liteChildProcess.t_unmock();
+    liteFs.t_unmock();
     realFs.unlinkSync(fixture);
   }
 });
@@ -388,7 +521,7 @@ test('长驻任务：定时器保持存活，kill 后停止输出并关闭', asy
 /** 场景：共享服务门面——入口使用调用方的 liteServer 环境，关闭监听后正常退出。 */
 test('共享服务门面：内存服务关闭后 Node 正常退出', async () => {
   const done = setup();
-  liteServer.mock();
+  liteServer.t_mock();
   const serverUrl = new URL('../lite-server.mjs', import.meta.url).href;
   const fixture = writeFixture(`
     import server from '${serverUrl}';
@@ -415,7 +548,7 @@ test('共享服务门面：内存服务关闭后 Node 正常退出', async () =>
     }
   } finally {
     done();
-    liteServer.unmock();
+    liteServer.t_unmock();
     realFs.unlinkSync(fixture);
   }
 });
@@ -436,7 +569,7 @@ test('撤销环境：unmock 后定时器不再产生文件副作用', async () =
     `]);
     await new Promise(resolve => child.stdout.once('data', resolve));
     const last = liteFs.readFileSync('/node-ticks', 'utf8');
-    liteChildProcess.unmock();
+    liteChildProcess.t_unmock();
     await new Promise(resolve => setTimeout(resolve, 25));
     // 预期 1：环境撤销后，原子进程的定时器不能再写文件
     assert.equal(liteFs.readFileSync('/node-ticks', 'utf8'), last, 'unmock 应取消活动子进程的定时器');
@@ -531,7 +664,7 @@ test('Process 字段写入：脚本与宿主环境保持各自视图', async () 
 /** 场景：终止持有监听服务的脚本时，服务资源也随命令释放。 */
 test('活动服务清理：终止 Node 后关闭其监听端口', async () => {
   const done = setup();
-  liteServer.mock();
+  liteServer.t_mock();
   const serverUrl = new URL('../lite-server.mjs', import.meta.url).href;
   const fixture = writeFixture(`
     import server from '${serverUrl}';
@@ -542,7 +675,7 @@ test('活动服务清理：终止 Node 后关闭其监听端口', async () => {
     const child = liteChildProcess.spawn('node', [fixture]);
     const closed = liteChildProcess.waitForClose(child);
     await new Promise(resolve => child.stdout.once('data', resolve));
-    const port = liteServer.port();
+    const port = liteServer.t_port();
     assert.ok(port > 0, '终止前服务应有实际监听端口');
     child.kill();
     // 预期：子进程以信号结束，服务监听已解除
@@ -553,5 +686,114 @@ test('活动服务清理：终止 Node 后关闭其监听端口', async () => {
         .on('error', error => resolve(error.code));
     });
     assert.equal(connection, 'ECONNREFUSED', '命令结束后原端口应拒绝新连接');
-  } finally { done(); liteServer.unmock(); realFs.unlinkSync(fixture); }
+  } finally { done(); liteServer.t_unmock(); realFs.unlinkSync(fixture); }
+});
+
+test('内存 Node 收到信号时执行处理器，未处理信号仍直接终止', async () => {
+  const done = setup();
+  try {
+    const child = liteChildProcess.spawn('node', ['-e', "process.on('SIGTERM', () => { console.log('received'); process.exit(7); }); console.log('ready'); setInterval(() => {}, 1000)"]);
+    let output = '';
+    await new Promise(resolve => child.stdout.on('data', chunk => { output += chunk; if (output.includes('ready')) resolve(); }));
+    const closed = liteChildProcess.waitForClose(child);
+    child.kill('SIGTERM');
+    assert.deepEqual(await closed, { code: 7, signal: null }, '处理器应决定退出码');
+    assert.match(output, /received/, '处理器应收到信号');
+    const other = liteChildProcess.spawn('node', ['-e', 'setInterval(() => {}, 1000)']);
+    await new Promise(resolve => other.once('spawn', resolve));
+    const terminated = liteChildProcess.waitForClose(other);
+    other.kill('SIGTERM');
+    assert.deepEqual(await terminated, { code: null, signal: 'SIGTERM' }, '未处理信号应按信号终止');
+  } finally { done(); }
+});
+
+test('内存 Node 通过 process.kill 检查虚拟进程存活', async () => {
+  const done = setup();
+  try {
+    const child = liteChildProcess.spawn('node', ['-e', `
+      try { console.log(process.kill(process.pid, 0)); }
+      catch (error) { console.log(error.code); }
+      try { process.kill(2147483647, 0); }
+      catch (error) { console.log(error.code); }
+    `]);
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    assert.deepEqual(await liteChildProcess.waitForClose(child), { code: 0, signal: null });
+    assert.equal(output.trim(), 'true\nESRCH', '脚本应能检查虚拟 PID，未知 PID 返回 ESRCH');
+  } finally { done(); }
+});
+
+test('信号关停遇到服务关闭挂起时仍触发进程内兜底退出', async () => {
+  const done = setup();
+  liteServer.t_mock();
+  const fixture = writeFixture(`
+    import liteServer from ${JSON.stringify(new URL('../lite-server.mjs', import.meta.url).href)};
+    const server = liteServer.createServer((_req, res) => res.end('ok'));
+    server.listen(0, () => console.log('ready'));
+    process.on('SIGTERM', () => {
+      setTimeout(() => { console.log('fallback'); process.exit(0); }, 60).unref();
+      server.close(() => { console.log('closed'); process.exit(0); });
+    });
+  `);
+  let release;
+  const wait = new Promise(resolve => { release = resolve; });
+  try {
+    liteServer.t_inject({ operation: 'close', wait, once: true });
+    const child = liteChildProcess.spawn('node', [fixture]);
+    let output = '';
+    await new Promise(resolve => child.stdout.on('data', chunk => { output += chunk; if (output.includes('ready')) resolve(); }));
+    const closed = liteChildProcess.waitForClose(child);
+    child.kill('SIGTERM');
+    assert.deepEqual(await closed, { code: 0, signal: null }, '兜底应以正常退出码结束');
+    assert.match(output, /fallback/, '关闭挂起时应执行兜底');
+    assert.doesNotMatch(output, /closed/, '闸门释放前关闭回调不得执行');
+  } finally { release(); liteServer.t_unmock(); done(); realFs.rmSync(fixture, { force: true }); }
+});
+
+/** 场景：spawn 输入暂存为 fd 0——脚本内 liteFs.readFileSync(0) 同步读到 spawn 的 input；无输入读得空串。 */
+test('stdin 同步读面：脚本 liteFs.readFileSync(0) 收到 spawn input，无输入为空', async () => {
+  const done = setup();
+  const fixture = writeFixture(`
+    process.stdout.write(liteFs.readFileSync(0, 'utf8'));
+  `);
+  try {
+    // 输入：带 input 的异步 spawn（脚本同步读 fd 0）
+    const withInput = await new Promise(resolve => {
+      const child = liteChildProcess.spawn('node', [fixture], { input: 'guard-payload\n' });
+      let stdout = '';
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.on('close', () => resolve({ stdout }));
+    });
+    assert.equal(withInput.stdout, 'guard-payload\n', '预期 1：stdout 回显 stdin 输入');
+    // 输入：无 input（暂存空缓冲）
+    const noInput = await new Promise(resolve => {
+      const child = liteChildProcess.spawn('node', [fixture], {});
+      let stdout = '';
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.on('close', () => resolve({ stdout }));
+    });
+    assert.equal(noInput.stdout, '', '预期 2：无输入读得空串');
+  } finally { done(); realFs.rmSync(fixture, { force: true }); }
+});
+
+/** 场景：跨运行隔离——上一次运行的 fd 0 暂存在 dispose 时释放，后继运行只读到自己的输入。 */
+test('stdin 暂存跨运行隔离：第二次运行不残留第一次输入', async () => {
+  const done = setup();
+  const fixture = writeFixture(`
+    process.stdout.write(liteFs.readFileSync(0, 'utf8'));
+  `);
+  try {
+    // 输入：同一夹具连续两次不同输入
+    const outputs = [];
+    for (const input of ['first\n', 'second\n']) {
+      outputs.push(await new Promise(resolve => {
+        const child = liteChildProcess.spawn('node', [fixture], { input });
+        let stdout = '';
+        child.stdout.on('data', chunk => { stdout += chunk; });
+        child.on('close', () => resolve(stdout));
+      }));
+    }
+    // 预期：两次运行各自读到自己的输入，无跨运行残留
+    assert.deepEqual(outputs, ['first\n', 'second\n']);
+  } finally { done(); realFs.rmSync(fixture, { force: true }); }
 });
