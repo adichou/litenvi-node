@@ -15,6 +15,10 @@
     "test:coverage": "node --test --experimental-test-coverage tests/*.test.mjs"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adichou/litenvi-node.git"
+  },
   "dependencies": {
     "@sinonjs/fake-timers": "15.4.0",
     "shell-quote": "1.12.0",
