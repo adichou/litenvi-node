@@ -13,6 +13,9 @@ import liteFs from '../lite-fs.mjs';
 import liteChildProcess from '../lite-child_process.mjs';
 import { liteProcess, ProcessExitError } from '../lite-process.mjs';
 import mgr from '../lite-cmd-mgr.mjs';
+// 包自引用检查的相对导入须置于 mgr 之后：mgr ↔ os 协同加载环，先进入 os 会令 mgr 尾部
+// 注册循环读到未初始化的 pkg_OS_COMMANDS（TDZ）
+import { pkg_COMMANDS as osCommands } from '../lite-cmd-os.mjs';
 
 const selfFile = new URL(import.meta.url).pathname;
 const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));
@@ -509,4 +512,11 @@ test('kill 信号名选项：-TERM 投递 SIGTERM 并移除活动 PID', async ()
     assert.deepEqual(await closed, { code: null, signal: 'SIGTERM' }, '退出信号应为 SIGTERM');
     assert.equal(liteChildProcess.spawnSync('kill', ['-0', String(child.pid)]).status, 1, '退出后的 PID 不应继续存在');
   } finally { done(); }
+});
+
+/** 场景：包自引用 specifier 与相对导入共享同一单例——命令集无独立门面实例，以导出的命令表
+ * 对象身份验证（业务经 litenvi-node/lite-cmd-os.mjs 导入须与库内部相对导入一致）。 */
+test('包自引用 specifier 与相对导入共享同一单例', async () => {
+  const selfRef = await import('litenvi-node/lite-cmd-os.mjs');
+  assert.equal(selfRef.pkg_COMMANDS, osCommands, '同一模块经不同 specifier 应共享同一实例');
 });

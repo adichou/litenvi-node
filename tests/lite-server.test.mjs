@@ -632,3 +632,10 @@ test('服务关闭故障闸门延迟关闭回调并可释放', async () => {
     assert.equal(closed, true, '释放闸门后关闭应完成');
   } finally { release(); liteServer.t_unmock(); liteHttp.t_unmock(); }
 });
+
+/** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-server.mjs 导入的
+ * 门面与库内部相对导入必须是同一实例，否则服务账本会静默分裂（exports 变动先红）。 */
+test('包自引用 specifier 与相对导入共享同一单例', async () => {
+  const selfRef = await import('litenvi-node/lite-server.mjs');
+  assert.equal(selfRef.default, liteServer, '同一模块经不同 specifier 应共享同一实例');
+});

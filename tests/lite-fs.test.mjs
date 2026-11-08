@@ -545,3 +545,10 @@ test('realpathSync：软链解析与原生一致、循环 ELOOP、缺失 ENOENT'
     assert.throws(() => liteFs.realpathSync(`${ROOT}/rp/dangling`), err => err.code === 'ENOENT', '预期 5：悬空链接 ENOENT');
   } finally { liteFs.t_unmock(); }
 });
+
+/** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-fs.mjs 导入的
+ * 门面与库内部相对导入必须是同一实例，否则内存世界会静默分裂（exports 变动先红）。 */
+test('包自引用 specifier 与相对导入共享同一单例', async () => {
+  const selfRef = await import('litenvi-node/lite-fs.mjs');
+  assert.equal(selfRef.default, liteFs, '同一模块经不同 specifier 应共享同一实例');
+});

@@ -501,7 +501,7 @@ test('内存实现：调用入账、替身子进程带 pid/unref、不起真实�
   liteFs.mkdirSync('/mock/project', { recursive: true }); // 卷在 → /mock-cmd 系统卷惰性安装，node（mgr 自动加载）可解析
   liteChildProcess.t_mock();
   try {
-    const child = liteChildProcess.spawn('node', ['/app/server.mjs'], { cwd: '/app', env: { ATB_PORT: '18888' }, detached: true });
+    const child = liteChildProcess.spawn('node', ['/app/server.mjs'], { cwd: '/app', env: { APP_PORT: '18888' }, detached: true });
     child.unref(); // detached 守护进程消费面
     // 预期 1：替身子进程带数字 pid
     assert.equal(typeof child.pid, 'number', '替身子进程应带 pid');
@@ -513,7 +513,7 @@ test('内存实现：调用入账、替身子进程带 pid/unref、不起真实�
     // 预期 4：args 如实记录
     assert.deepEqual(call.args, ['/app/server.mjs'], 'args 应如实记录');
     // 预期 5：options.env 如实记录
-    assert.equal(call.options.env.ATB_PORT, '18888', 'options.env 应如实记录');
+    assert.equal(call.options.env.APP_PORT, '18888', 'options.env 应如实记录');
     // 预期 6：options.cwd 如实记录
     assert.equal(call.options.cwd, '/app', 'options.cwd 应如实记录');
     // 预期 7：options.detached 如实记录
@@ -1123,4 +1123,11 @@ test('暂停后的完成：同步回落与异步命令均在 SIGCONT 后输出�
       assert.deepEqual(events, ['done\n', 'exit', 'close'], `${command} 恢复后事件应只交付一次`);
     }
   } finally { done(); }
+});
+
+/** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-child_process.mjs 导入的
+ * 门面与库内部相对导入必须是同一实例，否则 mock 边界会静默分裂（exports 变动先红）。 */
+test('包自引用 specifier 与相对导入共享同一单例', async () => {
+  const selfRef = await import('litenvi-node/lite-child_process.mjs');
+  assert.equal(selfRef.default, liteChildProcess, '同一模块经不同 specifier 应共享同一实例');
 });

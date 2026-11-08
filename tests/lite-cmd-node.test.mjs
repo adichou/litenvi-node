@@ -10,6 +10,9 @@ import { pathToFileURL } from 'node:url';
 import liteChildProcess from '../lite-child_process.mjs';
 import { liteProcess } from '../lite-process.mjs';
 import mgr from '../lite-cmd-mgr.mjs';
+// 包自引用检查的相对导入须置于 mgr 之后：mgr ↔ node 协同加载环，先进入 node 会令 mgr 尾部
+// 注册循环读到未初始化的 pkg_NODE_COMMANDS（TDZ）
+import { pkg_COMMANDS as nodeCommands } from '../lite-cmd-node.mjs';
 
 const NODE_COMMAND_PATH = '/mock-cmd/usr/local/bin/node';
 const selfFile = new URL(import.meta.url).pathname;
@@ -293,13 +296,13 @@ test('入口脚本执行：真实源码、env 落位、argv 子进程口径、�
   liteProcess.t_mock({ cwd: '/mock/project' });
   const fixture = writeFixture(`
 liteFs.writeFileSync('/mock/project/fixture-out.json', JSON.stringify({
-  argv: process.argv.slice(1, 4), env: process.env.ATB_CMD_NODE_PROBE, url: import.meta.url,
+  argv: process.argv.slice(1, 4), env: process.env.APP_CMD_NODE_PROBE, url: import.meta.url,
 }));`);
   liteChildProcess.t_mock();
   try {
     // 输入：spawn node（带入口前旗标 + 入口后参数 + 自定义 env）
     const child = liteChildProcess.spawn('node', ['--max-old-space-size=1', fixture, '--after'], {
-      env: { ATB_CMD_NODE_PROBE: 'lit' },
+      env: { APP_CMD_NODE_PROBE: 'lit' },
     });
     const closed = await liteChildProcess.waitForClose(child);
     const out = JSON.parse(liteFs.readFileSync('/mock/project/fixture-out.json', 'utf8'));
@@ -796,4 +799,11 @@ test('stdin 暂存跨运行隔离：第二次运行不残留第一次输入', as
     // 预期：两次运行各自读到自己的输入，无跨运行残留
     assert.deepEqual(outputs, ['first\n', 'second\n']);
   } finally { done(); realFs.rmSync(fixture, { force: true }); }
+});
+
+/** 场景：包自引用 specifier 与相对导入共享同一单例——命令集无独立门面实例，以导出的命令表
+ * 对象身份验证（业务经 litenvi-node/lite-cmd-node.mjs 导入须与库内部相对导入一致）。 */
+test('包自引用 specifier 与相对导入共享同一单例', async () => {
+  const selfRef = await import('litenvi-node/lite-cmd-node.mjs');
+  assert.equal(selfRef.pkg_COMMANDS, nodeCommands, '同一模块经不同 specifier 应共享同一实例');
 });

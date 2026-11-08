@@ -127,3 +127,10 @@ test('入参校验：mock 形状/纪元、advanceMs 数值与状态', async () =
   }
   await assert.doesNotReject(() => liteTimer.t_advanceMs(0), '零推进应合法');
 });
+
+/** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-timer.mjs 导入的
+ * 遮蔽绑定与库内部相对导入必须是同一实例，否则虚拟时钟会静默分裂（exports 变动先红）。 */
+test('包自引用 specifier 与相对导入共享同一单例', async () => {
+  const selfRef = await import('litenvi-node/lite-timer.mjs');
+  assert.equal(selfRef.default, liteTimer, '同一模块经不同 specifier 应共享同一实例');
+});

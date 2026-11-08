@@ -434,7 +434,8 @@ test('inject 句柄形态与命中顺序：command().inject、按注入序、移
   }
 });
 
-/** 场景：非法 fault 拒绝——exit 缺席且无 wait、exit 0/负数/非整、wait 非 Promise、stderr 非串、非对象。 */
+/** 场景：非法 fault 拒绝——exit 缺席且无 wait、exit 0/负数/非整、wait 非 Promise、stderr 非串、
+ * checkpoint 与故障混用、非对象。 */
 test('inject 非法 fault：各非法形态逐一拒绝', () => {
   const done = setup();
   try {
@@ -451,9 +452,11 @@ test('inject 非法 fault：各非法形态逐一拒绝', () => {
     assert.throws(() => mgr.command('tst').t_inject({ wait: 5 }), /Promise/, 'wait 非 Promise 应拒绝');
     // 预期 6：stderr 非字符串拒绝
     assert.throws(() => mgr.command('tst').t_inject({ exit: 3, stderr: 5 }), /stderr/, 'stderr 非字符串应拒绝');
-    // 预期 7：非对象拒绝
+    // 预期 7：checkpoint 与故障配置混用拒绝
+    assert.throws(() => mgr.command('tst').t_inject({ checkpoint: 'c', onHit() {}, exit: 1 }), /混用/, 'checkpoint 不能与故障配置混用');
+    // 预期 8：非对象拒绝
     assert.throws(() => mgr.command('tst').t_inject(null), /fault/, 'null 应拒绝');
-    // 预期 8：未登记命令返回 null，没有可用于注入的命令对象
+    // 预期 9：未登记命令返回 null，没有可用于注入的命令对象
     assert.equal(mgr.command('no-such-cmd'), null, '未登记命令不应返回配置对象');
   } finally {
     done();
@@ -504,5 +507,12 @@ test('register 校验：裸名/impl/先 mock lite-fs', async () => {
   liteFs.t_unmock();
   // 预期 2：拒绝（命令文件落内存卷）
   assert.throws(() => mgr.t_defineUserCommand('x', {}), /先 t_mock/, '未 mock lite-fs 应拒绝');
+});
+
+/** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-cmd-mgr.mjs 导入的
+ * 登记表与库内部相对导入必须是同一实例，否则命令注册会静默分裂（exports 变动先红）。 */
+test('包自引用 specifier 与相对导入共享同一单例', async () => {
+  const selfRef = await import('litenvi-node/lite-cmd-mgr.mjs');
+  assert.equal(selfRef.default, mgr, '同一模块经不同 specifier 应共享同一实例');
 });
 

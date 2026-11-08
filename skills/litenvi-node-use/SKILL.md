@@ -1,6 +1,6 @@
 ---
 name: litenvi-node-use
-description: 在业务项目中使用 litenvi-node 编写测试或装配测试环境时使用。涉及 import 'litenvi-node/…' 门面、t_mock/t_unmock/t_inject、内存文件系统、内存命令与内存 Git、故障注入、虚拟时钟（lite-timer / lite-browser-timer）、lite-browser Playwright 页面承载时触发。修改 litenvi-node 仓库本身时用 litenvi-node-dev。
+description: 在业务项目中使用 litenvi-node 编写测试或装配测试环境时使用。涉及 import 'litenvi-node/…' 门面、t_mock/t_unmock/t_inject、内存文件系统、内存命令与内存 Git、内存 ESLint、故障注入、虚拟时钟（lite-timer / lite-browser-timer）、lite-browser Playwright 页面承载时触发。修改 litenvi-node 仓库本身时用 litenvi-node-dev。
 ---
 
 # litenvi-node 使用指南
@@ -13,16 +13,15 @@ litenvi-node 是可切换门面库：业务代码统一 import `litenvi-node/lit
 import liteFs from 'litenvi-node/lite-fs.mjs';
 import liteChildProcess from 'litenvi-node/lite-child_process.mjs';
 
-test('示例', async () => {
-  liteFs.t_unmock();          // 起手先复位（状态是进程级单例）
-  liteChildProcess.t_mock();
-  try {
-    // 业务代码照常 import 门面，这里跑在内存世界
-  } finally {
-    liteChildProcess.t_unmock();  // 必须归位，否则泄漏到后续用例
-    liteFs.t_unmock();
-  }
-});
+// 总装模式：起手先复位（状态是进程级单例），try/finally 归位。
+liteFs.t_unmock();
+liteChildProcess.t_mock();
+try {
+  // 业务代码照常 import 门面，这里跑在内存世界
+} finally {
+  liteChildProcess.t_unmock();  // 必须归位，否则泄漏到后续用例
+  liteFs.t_unmock();
+}
 ```
 
 铁律：
@@ -51,6 +50,7 @@ test('示例', async () => {
 
 - node/os 系统命令导入即登记（node/npm、open/ls/pwd/cwd/kill、mkdir/rm/cp/mv/cat/touch/test、cd/exit 内建）。
 - **Git 须显式安装**：`import { t_install } from 'litenvi-node/lite-cmd-git.mjs'; t_install();`——仅导入不会登记，执行返回 `ENOENT`。`t_install()` 在内存卷建立前后调用皆可，幂等。
+- **ESLint 同样须显式安装**：`import { t_install } from 'litenvi-node/lite-cmd-eslint.mjs'; t_install();`——时序与幂等语义同 Git。前置：使用方项目须已安装 eslint（npm 解析基按序为宿主入口脚本 → 宿主 cwd → 本库自身，插件与引擎都从使用方侧解析）。规则经 flat config 的 plugins 外置（`{ rules }` 对象或卷内路径字符串），规则文件 `export default { meta, create(context) }` 即 ESLint 规则 API——文本类（report 顶层 line/column，1 基）与 AST visitor 类均可执行；卷内模块支持具名导出与 named import；带 options 的规则须声明 meta.schema；配置/规则模块 import 的 `node:fs`/`fs` 经 lite-fs 门面（mock 后读内存卷）；`eslint.config.mjs` 从执行 cwd 向上查找（或 `--config` 指定）；核心规则裸名直接可用；无子命令、无 checkpoint。
 - 配置入口 `mgr.command(nameOrPath)`：`t_onRun(handler)` 配置行为钩子（`(call, runBuiltin) => result`，`null` 移除）；`t_inject(fault)` 注入故障 `{ exit?, stderr?, wait?, once?, subcommand? }`，git 可按 `subcommand` 匹配（如 `{ subcommand: 'add', exit: 128, stderr: 'index.lock', once: true }`）。
 - 用户级临时命令：`mgr.t_defineUserCommand(name, impl)`（impl 含 `pkg_run/pkg_runSync`），落 `/mock/bin` 可遮蔽系统命令，须先 mock lite-fs，卷复位即清。
 
@@ -126,7 +126,7 @@ try {
 
 ## 常见坑
 
-- 忘了 `t_install()` → Git 返回 ENOENT；忘 `try/finally` 归位 → 泄漏到后续用例。
+- 忘了 `t_install()` → Git / ESLint 返回 ENOENT；忘 `try/finally` 归位 → 泄漏到后续用例。
 - `lite-fs` 黑名单制：想读真实磁盘上的 fixtures，必须放进 `t_mock({ exclude })`；exclude 目录外的写永远落内存卷。
 - 故障 `exit` 不允许为 0（不允许成功回包替换）；要"命中后放行再失败"用 `wait` Promise 闸门。
 - URL 注入查询串是精确序匹配：参数顺序不同、多一个参数都不命中——要宽松匹配改用 `path` 或 `query`。

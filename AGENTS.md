@@ -1,6 +1,6 @@
 # litenvi-node — AI 开发与使用须知
 
-可切换的 Node 与浏览器测试环境门面库：每个 `lite-*` 模块默认透传原生实现，测试显式 `t_mock()` 后切换到内存世界（文件系统、命令执行、Git、HTTP、时钟）。业务逻辑与路由仍运行完整生产源码。npm 公共包，纯 ESM（`"type": "module"`，经 `litenvi-node/lite-xxx.mjs` 子路径导入）。
+可切换的 Node 与浏览器测试环境门面库：每个 `lite-*` 模块默认透传原生实现，测试显式 `t_mock()` 后切换到内存世界（文件系统、命令执行、Git、ESLint、HTTP、时钟）。业务逻辑与路由仍运行完整生产源码。npm 公共包，纯 ESM（`"type": "module"`，经 `litenvi-node/lite-xxx.mjs` 子路径导入）。
 
 ## 模块地图
 
@@ -14,6 +14,7 @@
 | `lite-cmd-mgr.mjs` | 命令内核（登记表，无开关） | — | `mgr.command(...).t_inject / t_onRun`、`t_defineUserCommand / t_defined` |
 | `lite-cmd-node.mjs` / `lite-cmd-os.mjs` | 系统命令集 | 导入即登记 | — |
 | `lite-cmd-git.mjs` | Git 命令集 | 测试显式 `t_install()` | `t_install` |
+| `lite-cmd-eslint.mjs` | ESLint 命令集（真实引擎委托：宿主 eslint Linter，规则经 plugins 外置） | 测试显式 `t_install()` | `t_install` |
 | `lite-timer.mjs` | Node 定时器与 `Date`（遮蔽注入） | `t_mock({ now })` | `t_advanceMs` |
 | `lite-browser.mjs` | Playwright 共享单例 | 无 mock（`open` / `close`） | — |
 | `lite-browser-timer.mjs` | 页面超时信号与周期定时 gate | `t_mock()` | `t_fireSingalTimeout` / `t_tickIntervals` |
@@ -41,7 +42,15 @@
 - 用例起手先 `liteXxx.t_unmock()` 复位，`try/finally` 收尾——状态是进程级单例，漏清理会泄漏到后续用例。
 - 遮蔽注入类用例中，真实时间等待一律 `globalThis.setTimeout`（文件内导入的 `setTimeout` mock 后是虚拟时钟）。
 - 原生对照子进程使用 `tests/native-reference-env.mjs` 固定环境（屏蔽 IDE 调试器附加与终端着色干扰）。
-- 测试文件与模块一一对应：`tests/<模块名>.test.mjs`。
+- 测试文件与模块一一对应：`tests/<模块名>.test.mjs`；每个模块测试文件含一条包自引用单例检查（`import('litenvi-node/<模块>.mjs')` 与相对导入须为同一实例）。
+
+## 文档即代码（AI 校验）
+
+文档（AGENTS.md / README / skills）与实现的对齐不由测试守护，改由 AI 按语义校验——横幅措辞、模块地图与实现一致性、接口面、示例块有效性、skills 软链接布局等全部文档约定面纳入同一校验，语义级判断比语法级断言更稳。测试只守护模块行为（tests/ 黑盒用例），相应的文档纪律不变：
+
+- AGENTS.md 模块地图是唯一真源：新增模块先补表格行与 `tests/<模块名>.test.mjs`。
+- js 示例块约定为可真实执行的完整示例：块内只用包自引用 specifier（`'litenvi-node/…'`）、自带归位（try/finally + t_unmock）；需真实浏览器/外部服务的示例（lite-browser/playwright）除外。
+- 每个模块测试文件含一条包自引用单例检查（`import('litenvi-node/<模块>.mjs')` 与相对导入须为同一实例），守护发布面与单例契约。
 
 ## 代码风格
 
@@ -52,6 +61,6 @@
 
 两个 skill 的真源在仓库根 `skills/` 目录（`skills/litenvi-node-dev/`、`skills/litenvi-node-use/`），`.agents/skills/` 下是指向它们的相对软链接（供 ZCode 等 Agent 工作区发现，勿在软链接侧直接改动）：业务项目里 import `litenvi-node/lite-*.mjs` 装配测试世界、注入故障、控制时钟的操作指南，见 skill **`litenvi-node-use`**；修改本仓库源码、新增命令与用例的完整指南，见 skill **`litenvi-node-dev`**。使用侧三条高频提醒：
 
-- Git 必须显式 `t_install()`，仅导入模块不会登记，未安装时执行返回 `ENOENT`。
+- Git / ESLint 必须显式 `t_install()`（`lite-cmd-git.mjs` / `lite-cmd-eslint.mjs`），仅导入模块不会登记，未安装时执行返回 `ENOENT`。
 - `lite-fs` 是黑名单制作用域：`exclude` 外的路径全部落内存卷，防止越界写穿透真实磁盘。
 - 要共享单例状态，必须经同一 specifier 导入（含动态 import 的 specifier 也须一致）。

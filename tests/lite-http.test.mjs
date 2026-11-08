@@ -304,3 +304,10 @@ test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离'
       assert.throws(() => liteHttp.t_inject({ url, status: 503 }), /url/, '非法 URL 应在注入时拒绝');
   } finally { liteHttp.t_unmock(); liteServer.t_unmock(); }
 });
+
+/** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-http.mjs 导入的
+ * 门面与库内部相对导入必须是同一实例，否则注入规则会静默分裂（exports 变动先红）。 */
+test('包自引用 specifier 与相对导入共享同一单例', async () => {
+  const selfRef = await import('litenvi-node/lite-http.mjs');
+  assert.equal(selfRef.default, liteHttp, '同一模块经不同 specifier 应共享同一实例');
+});

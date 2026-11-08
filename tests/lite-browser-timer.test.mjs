@@ -290,3 +290,10 @@ test('interval gate：拒绝非法参数并传播回调错误', async () => {
     assert.deepEqual(errors, { callback: 'TypeError', step: 'interval failure', completed: true }, '非法回调和执行错误应反馈给测试，不得静默吞掉');
   });
 });
+
+/** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-browser-timer.mjs 导入的
+ * 门面与库内部相对导入必须是同一实例，否则页面时钟 gate 会静默分裂（exports 变动先红）。 */
+test('包自引用 specifier 与相对导入共享同一单例', async () => {
+  const selfRef = await import('litenvi-node/lite-browser-timer.mjs');
+  assert.equal(selfRef.default, timer, '同一模块经不同 specifier 应共享同一实例');
+});

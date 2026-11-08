@@ -51,6 +51,29 @@ const write = (root, rel, text) => {
   liteFs.writeFileSync(path.join(root, ...rel.split('/')), text);
 };
 
+/** 场景：未 t_install 时仅导入模块不会登记命令，spawn/spawnSync 均按真实 Node 语义返回 ENOENT。
+ * 置于文件首位（其余用例的 setup 均会 t_install，登记随进程存活）；且不 mock lite-fs——
+ * ENOENT 在寻址层返回无需卷，mock 后的失败寻址会触发 /mock-cmd 持久卷惰性创建，
+ * 破坏后续用例「首次 mock 时 /mock-cmd 尚不存在 → 惰性安装全部登记命令」的时序。 */
+test('未 t_install 时执行返回 ENOENT', async () => {
+  liteChildProcess.t_mock();
+  try {
+    // 输入：不调用 t_install，直接 spawnSync('git', ['status'])
+    const synced = liteChildProcess.spawnSync('git', ['status'], { encoding: 'utf8' });
+    // 预期 1：同步执行启动失败且错误码为 ENOENT
+    assert.equal(synced.status, null, '未登记的 git 应启动失败');
+    assert.equal(synced.error?.code, 'ENOENT', '应按真实 Node 语义返回 ENOENT');
+    // 输入：异步 spawn('git', ['status'])
+    const child = liteChildProcess.spawn('git', ['status']);
+    const error = await new Promise((resolve) => child.once('error', resolve));
+    await liteChildProcess.waitForClose(child);
+    // 预期 2：异步执行同样以 ENOENT 错误事件失败
+    assert.equal(error?.code, 'ENOENT', '异步 spawn 也应以 ENOENT 错误事件失败');
+  } finally {
+    liteChildProcess.t_unmock();
+  }
+});
+
 /** 场景：重复显式安装不覆盖既有脚本钩子和一次性故障，后续 Git 仍执行内置实现。 */
 test('重复 t_install 保留钩子与故障配置', () => {
   const done = setup();
@@ -1557,4 +1580,11 @@ test('Git 写入失败：ENOSPC 通过命令结果报告，撤销后可恢复', 
     remove(); remove = undefined;
     assert.equal(run(['add', 'tracked']).status, 0, '恢复写入后应可暂存');
   } finally { remove?.(); done(); }
+});
+
+/** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-cmd-git.mjs 导入的
+ * 安装入口与库内部相对导入必须是同一实例（exports 变动先红）。 */
+test('包自引用 specifier 与相对导入共享同一单例', async () => {
+  const selfRef = await import('litenvi-node/lite-cmd-git.mjs');
+  assert.equal(selfRef.t_install, t_install, '同一模块经不同 specifier 应共享同一实例');
 });

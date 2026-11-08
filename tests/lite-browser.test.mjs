@@ -167,3 +167,10 @@ test('前置约束：未 open 时 page()/context() 拒绝、close 未 open 静�
   // 预期 3：close() 未 open 静默完成（no-op 不抛错不拒绝）
   await assert.doesNotReject(() => liteBrowser.close(), '未 open 的 close 应静默 no-op');
 });
+
+/** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-browser.mjs 导入的
+ * 单例与库内部相对导入必须是同一实例，否则浏览器实例会静默分裂（exports 变动先红）。 */
+test('包自引用 specifier 与相对导入共享同一单例', async () => {
+  const selfRef = await import('litenvi-node/lite-browser.mjs');
+  assert.equal(selfRef.default, liteBrowser, '同一模块经不同 specifier 应共享同一实例');
+});

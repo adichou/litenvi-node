@@ -99,7 +99,7 @@ test('真实 Process 对照：cwd/chdir、argv/env、字段、信号与退出码
 
 /** 场景：mock 字段——cwd/argv/env/pid 构造时给定，各自生效；env 为可写对象支持运行中改。 */
 test('mock 字段：cwd/argv/env/pid 构造时给定并生效、env 运行中可改', () => {
-  const done = setup({ argv: ['node', 'entry.mjs', '--flag'], env: { ATB_PROBE: 'lit' }, pid: 4321 });
+  const done = setup({ argv: ['node', 'entry.mjs', '--flag'], env: { APP_PROBE: 'lit' }, pid: 4321 });
   try {
     // 输入：读假世界各字段
     // 预期 1：cwd 为构造给定的初始当前目录
@@ -107,15 +107,15 @@ test('mock 字段：cwd/argv/env/pid 构造时给定并生效、env 运行中可
     // 预期 2：argv 为构造给定的子进程口径
     assert.deepEqual(liteProcess.argv, ['node', 'entry.mjs', '--flag'], 'argv 应为给定值');
     // 预期 3：env 为构造给定的对象
-    assert.equal(liteProcess.env.ATB_PROBE, 'lit', 'env 应为给定对象');
+    assert.equal(liteProcess.env.APP_PROBE, 'lit', 'env 应为给定对象');
     // 预期 4：pid 为构造给定值
     assert.equal(liteProcess.pid, 4321, 'pid 应为给定值');
     // 输入：运行中改 env 字段
-    liteProcess.env.ATB_RUNTIME = 'changed';
+    liteProcess.env.APP_RUNTIME = 'changed';
     // 预期 5：运行中改生效（可写对象）
-    assert.equal(liteProcess.env.ATB_RUNTIME, 'changed', 'env 运行中改应生效');
+    assert.equal(liteProcess.env.APP_RUNTIME, 'changed', 'env 运行中改应生效');
   } finally {
-    delete process.env.ATB_RUNTIME;
+    delete process.env.APP_RUNTIME;
     done();
   }
 });
@@ -306,4 +306,11 @@ test('命令寻址口径：cd/exit 经 mgr 配置寻址（命令在即语义在�
   } finally {
     done();
   }
+});
+
+/** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-process.mjs 导入的
+ * 门面与库内部相对导入必须是同一实例，否则假世界会静默分裂（exports 变动先红）。 */
+test('包自引用 specifier 与相对导入共享同一单例', async () => {
+  const selfRef = await import('litenvi-node/lite-process.mjs');
+  assert.equal(selfRef.liteProcess, liteProcess, '同一模块经不同 specifier 应共享同一实例');
 });
