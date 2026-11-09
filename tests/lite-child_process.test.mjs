@@ -1125,6 +1125,41 @@ test('暂停后的完成：同步回落与异步命令均在 SIGCONT 后输出�
   } finally { done(); }
 });
 
+/** 场景：spawn 的 options.timeout 与 stdio ignore 与真实 Node 对照（node:child_process 文档
+ * spawn options.timeout/killSignal/stdio：
+ * https://nodejs.org/api/child_process.html#child_processspawncommand-args-options）——
+ * 超时到期以 killSignal 终止（exit/close 带信号、无 error 事件、killed 置位、提前退出撤销
+ * 定时器），stdio 'ignore' 公开流为 null。 */
+test('真实 Node 对照：spawn 超时 killSignal 终止与 stdio ignore', async () => {
+  const scenario = async backend => {
+    const events = [];
+    // 输入：常驻子进程 + 20ms 超时 + SIGKILL，观察事件序与 killed 标记
+    const timed = backend.spawn('node', ['-e', 'setInterval(() => {}, 1000)'],
+      { timeout: 20, killSignal: 'SIGKILL', env: nativeReferenceEnv() });
+    timed.on('spawn', () => events.push('spawn'));
+    timed.on('error', () => events.push('error'));
+    const timedClose = new Promise(resolve => timed.once('close', (code, signal) => { events.push(['close', code, signal]); resolve(); }));
+    timed.once('exit', (code, signal) => events.push(['exit', code, signal]));
+    await timedClose;
+    events.push({ killed: timed.killed });
+    // 输入：stdio 'ignore' 的快速命令——公开流为 null，正常退出
+    const ignored = backend.spawn('echo', ['done'], { stdio: 'ignore', env: nativeReferenceEnv() });
+    const ignoredClose = new Promise(resolve => ignored.once('close', (code, signal) => resolve({ code, signal })));
+    const ignoredShape = { stdin: ignored.stdin, stdout: ignored.stdout, stderr: ignored.stderr };
+    const ignoredExit = await ignoredClose;
+    return { timed: events, ignored: { ...ignoredShape, ...ignoredExit } };
+  };
+  try {
+    const expected = await scenario({ spawn: nativeSpawn });
+    liteFs.t_mock({ exclude: [EXCLUDED] });
+    liteChildProcess.t_mock();
+    try {
+      // 预期 1：超时终止的事件序（无 error）、SIGKILL 信号、killed 与 ignore 流形状均一致
+      assert.deepEqual(await scenario(liteChildProcess), expected, 'spawn 超时与 stdio ignore 应与原生一致');
+    } finally { liteChildProcess.t_unmock(); liteFs.t_unmock(); }
+  } finally { liteChildProcess.t_unmock(); liteFs.t_unmock(); }
+});
+
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-child_process.mjs 导入的
  * 门面与库内部相对导入必须是同一实例，否则 mock 边界会静默分裂（exports 变动先红）。 */
 test('包自引用 specifier 与相对导入共享同一单例', async () => {

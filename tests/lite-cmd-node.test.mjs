@@ -28,7 +28,7 @@ function setup() {
 }
 
 // 夹具工厂：真实目录提供入口源码，共享 liteFs 门面承接内存文件副作用。
-import realFs from 'node:fs';
+import realFs, { readFileSync as nativeReadFileSync, writeFileSync as nativeWriteFileSync, existsSync as nativeExistsSync } from 'node:fs';
 import os from 'node:os';
 import liteFs from '../lite-fs.mjs';
 import liteServer from '../lite-server.mjs';
@@ -224,6 +224,115 @@ test('普通 import：共享宿主全局、重复入口执行、并发输出与�
     done();
     realFs.unlinkSync(fixture);
     delete globalThis[marker];
+  }
+});
+
+/** 场景：虚拟 Node 命令运行期间不替换原生 fs，CJS、ESM 默认和具名导入保持同一原生接口。
+ * 夹具只观测原生接口身份，不通过原生 fs 读写业务文件；stdin 闸门保持命令运行以检查中间状态。 */
+test('显式文件边界：运行中原生 fs 保持不变', { timeout: 5000 }, async () => {
+  liteChildProcess.t_unmock();
+  liteFs.t_unmock();
+  const original = { read: realFs.readFileSync, write: realFs.writeFileSync, exists: realFs.existsSync };
+  const fixture = writeFixture(`
+    import fs from 'node:fs';
+    import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+    import { createRequire } from 'node:module';
+    const cjsFs = createRequire(import.meta.url)('fs');
+    console.log(JSON.stringify({
+      esm: readFileSync === fs.readFileSync && writeFileSync === fs.writeFileSync && existsSync === fs.existsSync,
+      cjs: cjsFs.readFileSync === fs.readFileSync && cjsFs.writeFileSync === fs.writeFileSync && cjsFs.existsSync === fs.existsSync,
+    }));
+    await new Promise(resolve => process.stdin.once('data', resolve));
+    console.log('released');
+  `);
+  const done = setup();
+  let child, closed;
+  try {
+    // 输入：启动夹具，收到接口观测结果后仍阻塞于 stdin，不使用固定睡眠猜测运行阶段。
+    child = liteChildProcess.spawn('node', [fixture]);
+    closed = liteChildProcess.waitForClose(child);
+    let output = '';
+    const ready = new Promise((resolve, reject) => {
+      child.stdout.on('data', chunk => {
+        output += chunk;
+        if (output.includes('\n')) {
+          try { resolve(JSON.parse(output.split('\n')[0])); }
+          catch (error) { reject(error); }
+        }
+      });
+      child.once('error', reject);
+      child.once('close', () => reject(new Error('夹具未报告接口身份便提前退出')));
+    });
+    const imports = await ready;
+    // 预期 1：命令确实仍在运行，原生默认对象和 ESM 具名导出均未被换成包装函数。
+    assert.equal(child.exitCode, null, 'stdin 闸门释放前虚拟 Node 应保持运行');
+    assert.equal(realFs.readFileSync, original.read, '命令运行中不得替换原生 readFileSync');
+    assert.equal(realFs.writeFileSync, original.write, '命令运行中不得替换原生 writeFileSync');
+    assert.equal(realFs.existsSync, original.exists, '命令运行中不得替换原生 existsSync');
+    assert.equal(nativeReadFileSync, original.read, '命令运行中不得改写 ESM 具名 readFileSync');
+    assert.equal(nativeWriteFileSync, original.write, '命令运行中不得改写 ESM 具名 writeFileSync');
+    assert.equal(nativeExistsSync, original.exists, '命令运行中不得改写 ESM 具名 existsSync');
+    assert.deepEqual(imports, { esm: true, cjs: true }, '脚本中的 CJS 与 ESM 导入应保持一致的原生 fs 接口');
+
+    // 输入：显式释放 stdin 闸门，等待命令通过正常生命周期结束。
+    child.stdin.end('release');
+    // 预期 2：命令正常退出，期间保留的原生接口在退出后仍保持原样。
+    assert.deepEqual(await closed, { code: 0, signal: null }, '释放闸门后虚拟 Node 应正常结束');
+    assert.ok(output.endsWith('released\n'), '脚本应在闸门释放后继续执行到结尾');
+    assert.equal(realFs.readFileSync, original.read, '命令结束后原生 readFileSync 应保持原样');
+    assert.equal(nativeReadFileSync, original.read, '命令结束后 ESM 具名 readFileSync 应保持原样');
+  } finally {
+    child?.stdin.end('cleanup');
+    if (closed) await closed;
+    done();
+    realFs.unlinkSync(fixture);
+  }
+});
+
+/** 场景：自研入口显式使用 lite-fs 执行读写和业务计算，写入故障经脚本处理后反映到 stderr 与退出码。 */
+test('显式文件边界：lite-fs 读写与故障传播', async () => {
+  liteChildProcess.t_unmock();
+  liteFs.t_unmock();
+  const fixture = writeFixture(`
+    try {
+      const input = JSON.parse(liteFs.readFileSync('/mock/project/input.json', 'utf8'));
+      liteFs.writeFileSync('/mock/project/output.json', JSON.stringify({ doubled: input.value * 2 }));
+      console.log('saved');
+    } catch (error) {
+      console.error(error.code);
+      process.exitCode = 7;
+    }
+  `);
+  const done = setup();
+  let remove;
+  try {
+    // 输入：内存输入值为 6，真实入口负责读取、计算并保存结果，不预置输出。
+    liteFs.mkdirSync('/mock/project', { recursive: true });
+    liteFs.writeFileSync('/mock/project/input.json', '{"value":6}');
+    const normal = liteChildProcess.spawn('node', [fixture]);
+    let stdout = '';
+    normal.stdout.on('data', chunk => { stdout += chunk; });
+    // 预期 1：完整入口真实计算并写入内存卷，命令正常退出。
+    assert.deepEqual(await liteChildProcess.waitForClose(normal), { code: 0, signal: null }, '显式 lite-fs 入口应正常结束');
+    assert.equal(stdout, 'saved\n', '入口成功写入后应报告 saved');
+    assert.deepEqual(JSON.parse(liteFs.readFileSync('/mock/project/output.json', 'utf8')), { doubled: 12 }, '入口应根据内存输入真实计算出 doubled=12');
+
+    // 输入：清除上次输出，仅在 lite-fs 写入边界注入 EACCES，再执行同一完整入口。
+    liteFs.unlinkSync('/mock/project/output.json');
+    remove = liteFs.t_inject({ op: 'writeFileSync', path: '/mock/project/output.json', code: 'EACCES' });
+    const failed = liteChildProcess.spawn('node', [fixture]);
+    let stderr = '', failedOutput = '';
+    failed.stderr.on('data', chunk => { stderr += chunk; });
+    failed.stdout.on('data', chunk => { failedOutput += chunk; });
+    // 预期 2：故障由脚本自身处理，产生预期退出码，不伪造写入成功或终止宿主进程。
+    assert.deepEqual(await liteChildProcess.waitForClose(failed), { code: 7, signal: null }, '写入被拒绝时应按脚本逻辑退出 7');
+    assert.equal(stderr, 'EACCES\n', '脚本应通过 stderr 报告写入错误码');
+    assert.equal(failedOutput, '', '写入失败时不得报告 saved');
+    assert.equal(liteFs.existsSync('/mock/project/output.json'), false, '故障写入不应生成输出文件');
+  } finally {
+    remove?.();
+    done();
+    realFs.unlinkSync(fixture);
   }
 });
 
@@ -558,18 +667,18 @@ test('共享服务门面：内存服务关闭后 Node 正常退出', async () =>
 
 /** 场景：撤销环境——unmock 停止子进程任务，防止定时器继续修改内存文件。 */
 test('撤销环境：unmock 后定时器不再产生文件副作用', async () => {
+  const fixture = writeFixture(`
+    let count = 0;
+    const timer = setInterval(() => {
+      liteFs.writeFileSync('/node-ticks', String(++count));
+      console.log('tick');
+      if (count === 10) clearInterval(timer);
+    }, 5);
+  `);
   const done = setup();
   try {
     // 输入：定时器每次写文件，首次完成后撤销子进程 mock；次数上限防止失败时挂住测试
-    const child = liteChildProcess.spawn('node', ['-e', `
-      const fs = require('node:fs');
-      let count = 0;
-      const timer = setInterval(() => {
-        fs.writeFileSync('/node-ticks', String(++count));
-        console.log('tick');
-        if (count === 10) clearInterval(timer);
-      }, 5);
-    `]);
+    const child = liteChildProcess.spawn('node', [fixture]);
     await new Promise(resolve => child.stdout.once('data', resolve));
     const last = liteFs.readFileSync('/node-ticks', 'utf8');
     liteChildProcess.t_unmock();
@@ -578,6 +687,7 @@ test('撤销环境：unmock 后定时器不再产生文件副作用', async () =
     assert.equal(liteFs.readFileSync('/node-ticks', 'utf8'), last, 'unmock 应取消活动子进程的定时器');
   } finally {
     done();
+    realFs.unlinkSync(fixture);
   }
 });
 
@@ -799,6 +909,42 @@ test('stdin 暂存跨运行隔离：第二次运行不残留第一次输入', as
     // 预期：两次运行各自读到自己的输入，无跨运行残留
     assert.deepEqual(outputs, ['first\n', 'second\n']);
   } finally { done(); realFs.rmSync(fixture, { force: true }); }
+});
+
+/** 场景：stdin 脚本与 -p 求值打印与真实 Node 对照（node CLI 文档：无参数时从 stdin 读脚本、
+ * -p 打印求值结果：https://nodejs.org/api/cli.html#-eval-script /
+ * https://nodejs.org/api/cli.html#-print-script）——stdin 代码经 EOF 后执行并按结果退出，
+ * -p 的对象打印走 util.inspect 同源格式。（node 同步面仅支持 -v 为头注释声明的偏差口径，
+ * 不纳入对照。） */
+test('真实 Node 对照：stdin 脚本执行与 -p 求值打印', async () => {
+  const scenario = async memory => {
+    const responses = [];
+    const options = { env: nativeReferenceEnv(), encoding: 'utf8' };
+    const run = async (args, input) => {
+      const child = liteChildProcess.spawn(memory ? 'node' : process.execPath, args, options);
+      let stdout = '', stderr = '';
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.stderr.on('data', chunk => { stderr += chunk; });
+      if (input !== undefined) child.stdin.end(input);
+      const closed = await liteChildProcess.waitForClose(child);
+      responses.push({ code: closed.code, signal: closed.signal, stdout, stderr });
+    };
+    // 输入：无参数时从 stdin 读脚本（EOF 后执行），表达式与对象字面量的 -p 打印
+    await run([], 'console.log("stdin-ran", 6 * 7);\n');
+    await run(['-p', '({a: 1, b: [1, 2]})']);
+    await run(['-p', '1 + 1']);
+    await run(['-p', 'undefined']);
+    return responses;
+  };
+  try {
+    const expected = await scenario(false);
+    liteFs.t_mock({ exclude: [EXCLUDED] });
+    liteChildProcess.t_mock();
+    try {
+      // 预期：stdin 脚本输出/退出码与 -p 的 inspect 打印均与真实 Node 一致
+      assert.deepEqual(await scenario(true), expected, 'node stdin 与 -p 行为应与真实 Node 一致');
+    } finally { liteChildProcess.t_unmock(); liteFs.t_unmock(); }
+  } finally { liteChildProcess.t_unmock(); liteFs.t_unmock(); }
 });
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——命令集无独立门面实例，以导出的命令表

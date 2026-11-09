@@ -5,6 +5,9 @@
 // 本模块在 lite-fs 当前作用域维护仓库、提交 DAG、暂存区、引用与工作树，执行命令时不调用
 // 系统 Git。分支切换会更新工作树并检查覆盖冲突；标签、reset、revert、cherry-pick、merge、
 // stash 与 worktree 更新对应状态。无远端 fetch --all 成功，不可访问远端的传输命令失败。
+// 面向用户的输出文案对齐真实 Git：switch/checkout 非 quiet 的 Switched 行（stderr）、merge
+// 冲突的 Auto-merging/CONFLICT (content)/Automatic merge failed 行、ls-files --error-unmatch
+// 未命中的 "did not match any file(s)" + "Did you forget to 'git add'?" 提示。
 // 内部存储是测试环境的私有格式，不是原生 Git 磁盘格式：
 //   .git/HEAD、refs/heads/*、refs/tags/*：文本引用；
 //   .git/objects/<f_sha1>：类型行 + blob 原文或 tree/commit JSON；
@@ -702,6 +705,7 @@ function f_cmdLog(repo, args) {
         if (/^-\d+$/.test(a)) { limit = Number(a.slice(1)); continue; }
         if (a.startsWith('--max-count=')) { limit = Number(a.slice('--max-count='.length)) || Infinity; continue; }
         if (a === '--skip') { skip = Number(args[++i]) || 0; continue; }
+        if (a.startsWith('--skip=')) { skip = Number(a.slice('--skip='.length)) || 0; continue; }
         if (a === '--name-only' || a === '--no-renames') { if (a === '--name-only') nameOnly = true; continue; }
         if (a === '--not') { negate = !negate; continue; }
         if (a.startsWith('-')) continue;
@@ -718,7 +722,8 @@ function f_cmdLog(repo, args) {
         if (negate) exclude.push(a);
         else tips.push(a);
     }
-    if (!tips.length) tips.push('HEAD');
+    // 无任何引用实参才默认 HEAD；只有 --not 排除（无正向引用）时输出为空（对齐真实 rev-list 口径）
+    if (!tips.length && !exclude.length) tips.push('HEAD');
     for (const t of tips) {
         if (!f_resolveCommitish(repo, t)) return f_fatal(`ambiguous argument '${t}': unknown revision or path not in the working tree.`);
     }
@@ -738,6 +743,8 @@ function f_cmdLog(repo, args) {
 }
 
 // rev-parse：--is-inside-work-tree / --show-toplevel / [--verify [--quiet]] <rev> / --abbrev-ref
+//（--abbrev-ref 输出短引用名：符号 HEAD → 当前分支短名、分离态保持 'HEAD'；显式 @{upstream}
+// 查询在无 upstream 时 fatal）
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_cmdRevParse(repo, args) {
     const out = [];
@@ -755,8 +762,25 @@ function f_cmdRevParse(repo, args) {
         specs.push(a);
     }
     for (const spec of specs) {
-        if (abbrev || /@\{upstream\}$/.test(spec)) {
+        if (/@\{upstream\}$/.test(spec)) {
             return f_fatal(`no upstream configured for branch '${spec.replace(/@\{upstream\}$/, '')}'`);
+        }
+        // --abbrev-ref：输出短引用名（符号 HEAD → 当前分支短名，分离态保持 'HEAD'；
+        // refs/heads/ 前缀剥除；其余可解析引用按原样短名），无 upstream 的显式查询才 fatal。
+        if (abbrev) {
+            if (spec === 'HEAD') {
+                const state = f_headState(repo);
+                out.push(state.branch ?? 'HEAD');
+                continue;
+            }
+            const sha = f_resolveCommitish(repo, spec);
+            if (!sha) {
+                if (verify && quiet) return { status: 1, stdout: '', stderr: '' };
+                if (verify) return f_fatal('Needed a single revision');
+                return f_fatal(`ambiguous argument '${spec}': unknown revision or path not in the working tree.`);
+            }
+            out.push(spec.startsWith('refs/heads/') ? spec.slice('refs/heads/'.length) : spec);
+            continue;
         }
         const sha = f_resolveCommitish(repo, spec);
         if (!sha) {
@@ -871,21 +895,26 @@ function f_checkoutTree(repo, target, force = false) {
     return f_ok();
 }
 
-// switch [-q] [-c] <branch> [start]：更新工作树与暂存区后才推进 HEAD。
+// switch [-q] [-c] <branch> [start]：更新工作树与暂存区后才推进 HEAD；非 quiet 输出 Switched
+// to a new branch / Switched to branch 提示（stderr，对齐真实 git switch）。
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_cmdSwitch(repo, args) {
     let create = false;
+    let quiet = false;
     const pos = [];
     for (let i = 0; i < args.length; i++) {
         const a = args[i];
         if (a === '-c' || a === '--create' || a === '-C' || a === '--force-create') { create = true; continue; }
-        if (a === '-q' || a === '--quiet') continue;
+        if (a === '-q' || a === '--quiet') { quiet = true; continue; }
         if (a.startsWith('-')) continue;
         pos.push(a);
     }
     const name = pos[0];
     if (!name) return f_fatal('branch name required');
     if (!f_validRefName(name)) return f_fatal(`invalid branch name: ${name}`);
+    // 非 quiet 的切换提示走 stderr（对齐真实 git switch 口径）
+    const switched = created => quiet ? f_ok()
+        : { status: 0, stdout: '', stderr: created ? `Switched to a new branch '${name}'\n` : `Switched to branch '${name}'\n` };
     if (create) {
         if (f_readRef(repo, name) && !args.includes('-C') && !args.includes('--force-create'))
             return f_fatal(`a branch named '${name}' already exists`);
@@ -901,14 +930,14 @@ function f_cmdSwitch(repo, args) {
         if (checked.status) return checked;
         f_writeRef(repo, name, sha);
         f_setHead(repo, name);
-        return f_ok();
+        return switched(true);
     }
     const sha = f_readRef(repo, name);
     if (sha == null) return f_fatal(`invalid reference: ${name}`);
     const checked = f_checkoutTree(repo, f_treeOf(repo, f_readObject(repo, sha, 'commit')));
     if (checked.status) return checked;
     f_setHead(repo, name);
-    return f_ok();
+    return switched(false);
 }
 
 // checkout：分支切换 / detached（提交号）/ <rev> -- <paths> 检出。
@@ -984,7 +1013,8 @@ function f_cmdMergeBase(repo, args) {
         : { status: 1, stdout: '', stderr: '' };
 }
 
-// ls-files [--error-unmatch] [--] <p>…：index 命中
+// ls-files [--error-unmatch] [--] <p>…：index 命中；--error-unmatch 未命中 status 1 + did not
+// match 提示与 Did you forget to 'git add'? 行（对齐真实 git ls-files）。
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_cmdLsFiles(repo, args) {
     let errorUnmatch = false;
@@ -1007,7 +1037,7 @@ function f_cmdLsFiles(repo, args) {
             return {
                 status: 1,
                 stdout: '',
-                stderr: `error: pathspec '${spec}' did not match any file(s) known to git\n`,
+                stderr: `error: pathspec '${spec}' did not match any file(s) known to git\nDid you forget to 'git add'?\n`,
             };
         }
         matched.forEach((p) => hits.add(p));
@@ -1082,7 +1112,8 @@ function f_cmdLsTree(repo, args) {
     return f_ok(paths.length ? `${paths.join('\n')}\n` : '');
 }
 
-// diff：HEAD -- <p>（简化统一差异）/ --cached --quiet（退出码）/ --name-only --diff-filter=U（恒空）
+// diff：HEAD -- <p>（简化统一差异，untracked 不进 diff）/ --cached --quiet（退出码表脏净且
+// 不输出）/ --name-only --diff-filter=U（恒空）
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_cmdDiff(repo, args) {
     const dd = args.indexOf('--');
@@ -1105,21 +1136,26 @@ function f_cmdDiff(repo, args) {
             .some((p) => scope(p) && head[p] !== index[p]);
         return dirty ? { status: 1, stdout: '', stderr: '' } : f_ok();
     }
-    // 工作树 vs <rev>：简化统一差异（整块 -旧/+新，无行级 LCS）
+    // 工作树 vs <rev>：简化统一差异（整块 -旧/+新，无行级 LCS）。
+    // 只扫已跟踪路径（树内或索引内；untracked 不进 diff，对齐真实 diff 口径）；
+    // --quiet 只用退出码表达脏/净、不输出（对齐真实 diff --quiet）。
     const sha = f_resolveCommitish(repo, rev);
     const commit = sha && f_readObject(repo, sha, 'commit');
     if (!commit) return f_fatal(`ambiguous argument '${rev}': unknown revision or path not in the working tree.`);
     const tree = f_treeOf(repo, commit);
+    const index = f_readIndex(repo);
+    const tracked = new Set([...Object.keys(tree), ...Object.keys(index)]);
     const out = [];
     const scope = paths.length ? paths : [''];
     for (const spec of scope) {
-        for (const p of new Set([...Object.keys(tree), ...f_listWorktree(repo)])) {
+        for (const p of new Set([...tracked, ...f_listWorktree(repo).filter((w) => tracked.has(w))])) {
             if (!f_matchPathspec(spec, p)) continue;
             const oldData = p in tree ? f_readObject(repo, tree[p], 'blob') : null;
             const newData = f_readWorktreeFile(repo, p);
             const oldText = oldData ? oldData.toString('utf8') : null;
             const newText = newData ? newData.toString('utf8') : null;
             if (oldText === (newText == null ? null : newText)) continue;
+            if (quiet) return { status: 1, stdout: '', stderr: '' };
             out.push(`diff --git a/${p} b/${p}`);
             out.push(`--- ${oldText == null ? '/dev/null' : `a/${p}`}`);
             out.push(`+++ ${newText == null ? '/dev/null' : `b/${p}`}`);
@@ -1284,7 +1320,7 @@ function f_cmdMerge(repo, args, config) {
     const baseResult = f_cmdMergeBase(repo, [head, sha]);
     const base = f_treeOf(repo, f_readObject(repo, baseResult.stdout.trim(), 'commit'));
     const merged = f_applyTreeDelta(repo, base, target, f_treeOf(repo, f_readObject(repo, head, 'commit')));
-    if (merged.conflict) return { status: 1, stdout: `CONFLICT (content): Merge conflict in ${merged.conflict}\nAutomatic merge failed; fix conflicts and then commit the result.\n`, stderr: '' };
+    if (merged.conflict) return { status: 1, stdout: `Auto-merging ${merged.conflict}\nCONFLICT (content): Merge conflict in ${merged.conflict}\nAutomatic merge failed; fix conflicts and then commit the result.\n`, stderr: '' };
     const at = args.indexOf('-m');
     const message = at >= 0 ? args[at + 1] : `Merge branch '${last}'`;
     const committed = f_commitTree(repo, merged.tree, message, [head, sha], config);

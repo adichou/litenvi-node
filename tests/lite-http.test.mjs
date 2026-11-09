@@ -305,6 +305,52 @@ test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离'
   } finally { liteHttp.t_unmock(); liteServer.t_unmock(); }
 });
 
+/** 场景：拒连与响应元数据与真实 node:http 对照（node:http 文档 ClientRequest 'error' 事件 /
+ * IncomingMessage.headers/statusMessage：https://nodejs.org/api/http.html#http_http_request_options_callback /
+ * https://nodejs.org/api/http.html#messageheaders /
+ * https://nodejs.org/api/http.html#responsestatusmessage）——拒连错误对象（code/syscall/
+ * address/port 与消息，端口数字归一）、响应头全量键小写（文档：headers 所有键为小写）、
+ * statusMessage 取状态表。响应头键集合两侧不逐项比（原生含 date/keep-alive 等连接面，
+ * 卷内为内存回包形态）。 */
+test('真实 HTTP 对照：拒连错误字段、statusMessage 与响应头小写键', async () => {
+  const scenario = async (memory, refusedPort) => {
+    if (memory) { liteHttp.t_mock(); liteServer.t_mock(); }
+    const client = memory ? liteHttp : http;
+    const server = (memory ? liteServer : http).createServer(referenceHandler);
+    server.listen(0, '127.0.0.1');
+    await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
+    const port = memory ? server.port : server.address().port;
+    try {
+      // 输入：对无人监听端口发起请求，捕获错误对象字段
+      const refused = await new Promise(resolve => {
+        const req = client.request({ hostname: '127.0.0.1', port: refusedPort, path: '/echo', agent: false });
+        req.on('error', error => resolve({ code: error.code, syscall: error.syscall, address: error.address,
+          port: typeof error.port === 'number' ? '<port>' : error.port, message: error.message.replace(/\d+$/, '<port>') }));
+        req.end();
+        setTimeout(() => { req.destroy(); resolve({ timeout: true }); }, 2000);
+      });
+      // 输入：正常 GET，取状态码、statusMessage 与响应头键面
+      const metadata = await new Promise((resolve, reject) => {
+        client.request({ hostname: '127.0.0.1', port, path: '/missing', agent: false }, res => {
+          let body = '';
+          res.on('data', chunk => { body += chunk; });
+          res.on('end', () => resolve({ status: res.statusCode, statusMessage: res.statusMessage,
+            allLowercase: Object.keys(res.headers).every(key => key === key.toLowerCase()),
+            contentType: res.headers['content-type'], xReference: res.headers['x-reference'], body }));
+        }).on('error', reject).end();
+        setTimeout(() => reject(new Error('元数据对照超时')), 2000);
+      });
+      return { refused, metadata };
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+      if (memory) { liteHttp.t_unmock(); liteServer.t_unmock(); }
+    }
+  };
+  // 预期：拒连错误字段、statusMessage、响应头小写键与稳定子集均与原生一致
+  const expected = await scenario(false, 1);
+  assert.deepEqual(await scenario(true, 57891), expected, '拒连与响应元数据应与原生客户端一致');
+});
+
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-http.mjs 导入的
  * 门面与库内部相对导入必须是同一实例，否则注入规则会静默分裂（exports 变动先红）。 */
 test('包自引用 specifier 与相对导入共享同一单例', async () => {

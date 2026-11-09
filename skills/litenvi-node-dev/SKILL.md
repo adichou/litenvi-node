@@ -7,13 +7,24 @@ description: 开发 litenvi-node 仓库本身时使用。修改 lite-* 门面源
 
 本仓库是可切换的 Node 与浏览器测试环境门面库。开发前先读目标模块的**头注释**（它就是该模块的行为规格，含未覆盖面声明）和 README 对应章节，再动代码；不要凭直觉猜 API。仓库根 `AGENTS.md` 有模块地图与契约摘要，本 skill 是开发侧的完整操作指南。
 
+## 测试所有权与显式边界
+
+先确定代码是否由当前项目维护、是否允许修改，再决定测试范围；仅能查看第三方源码不代表要承担其内部实现测试。
+
+- **自研代码执行完整逻辑**：业务脚本、自研插件及其辅助模块应显式导入对应 lite 组件。生产默认透传，测试仅通过 `t_mock/t_unmock/t_inject` 等公开测试接口控制环境；不替换自研业务函数、不截断源码，也不预置业务流程的最终结果。
+- **第三方依赖由消费项目提供薄代理**：代理默认调用真实依赖，暴露与业务需要相符的公共接口，以及测试专用的 `t_mock/t_unmock` 等切换接口。测试按依赖的实际公共契约设置返回值、错误或异步等待等场景，验证自研代码如何消费这些响应；不在代理中复制第三方算法或实现完整第三方环境。
+- **第三方本体只做消费侧集成验证**：核对依赖加载、配置、接口调用和必要的真实接线。无需为其内部逻辑建立自研插件式黑盒套件，也不要求把其内部 `import/require`、`node:fs` 或依赖链全部接管到内存。自研插件需要测试内部 I/O 时，修改插件显式使用 `lite-fs` 等组件。
+- **不通过原生 API 自动接管替代适配**：不为让未适配的自研代码或第三方包自动进入假世界，替换共享 `node:fs` 方法、同步改写 ESM 导出、重写第三方加载链或扩展通用沙箱。`liteFs.t_mock()` 的契约是切换显式门面，不是自动接管任意原生调用。
+- **命令模拟与业务依赖分别定界**：`lite-cmd-node` 的启动、参数、输入输出、退出、信号和资源生命周期按命令契约验证；它不承担自动改造脚本内部文件访问的职责。业务代码的第三方代理留在消费项目，litenvi-node 仅提供通用环境门面。
+- **评审与迁移如实区分**：存量自动转发机制属于现状，不是上述边界的豁免。迁移时先让自研调用方显式使用 lite，保留命令自身必要的行为测试；不能整块删除命令运行时或仅改文档就宣称迁移完成。第三方内部原生 I/O 未被接管，不单独构成本项目缺陷；门面已声明的行为、配置匹配和命令结果仍须正常验收。
+
 ## 架构分层与依赖方向
 
 - **叶子模块**（不依赖其他 lite-*）：`lite-fs`（仅 node:fs/path）、`lite-timer`（仅 @sinonjs/fake-timers，不 install、不触碰宿主全局）、`lite-browser`（仅 playwright）、`lite-browser-timer`（零依赖）。
 - **HTTP 管线**：`lite-server ↔ lite-http` 互为两端（浏览器流量经真实 loopback socket 回灌进程内管线：内存客户端 → 服务端故障 → 真实 handler），属既定设计，不是待修复的环。
 - **命令体系**：`lite-cmd-mgr` 维护「完整路径 → impl」注册表，在 lite-fs 内存卷内维护 `/mock-cmd` 系统卷（导入即 `markPersistent`，跨卷复位存活）；`lite-cmd-node` / `lite-cmd-os` 导入即登记，`lite-cmd-git` / `lite-cmd-eslint` 须测试显式 `t_install()`。`lite-cmd-eslint` 运行时依赖宿主安装的 eslint 包（Linter 类纯内存委托，同 lite-browser 直接使用 playwright 的先例），发布面不含该依赖。
 - **执行面**：`lite-child_process` 是 spawn/exec/execFile 门面，mock 后经 mgr 解析分派内存命令；进程能力（cwd/env/argv/recordExit/setCwd）由 `lite-process.pkg_commandContext` 构建并经 ctx 传入，命令集不依赖 lite-process。
-- **虚拟 Node 脚本**（lite-cmd-node）：脚本普通 import 在宿主内执行，AsyncLocalStorage 将 process/console/定时器/文件路由到当前虚拟命令；spawn 输入经 lite-fs `pkg_stageStdin` 暂存为 fd 0。
+- **虚拟 Node 脚本**（lite-cmd-node）：脚本普通 import 在宿主内执行，AsyncLocalStorage 提供虚拟命令上下文；spawn 输入经 lite-fs `pkg_stageStdin` 暂存为 fd 0，脚本显式用 `liteFs.readFileSync(0)` 读取。不再包装原生 fs 方法或同步改写其 ESM 具名导出；入口的业务文件访问须显式使用 lite-fs，命令参数、输入输出、退出和信号等契约继续保留。
 
 新增依赖前先确认：不破坏上述分层、不引入环（http/server 互引除外）、叶子模块保持叶子。
 
@@ -82,7 +93,7 @@ description: 开发 litenvi-node 仓库本身时使用。修改 lite-* 门面源
 - **注入分层**：传输层故障（请求未达 handler）归 `lite-http.t_inject`；响应阶段（handler 已执行）归 `liteServer.t_inject`；close 收尾挂起也是 lite-server 的规则。改匹配条件（url/method/path/query 规范化）时两侧同步。
 - **URL 规则匹配是精确序**：查询串按完整顺序精确比较；`url` 与 `path` 的取舍、fragment 忽略等口径见 README，勿自行放宽。
 - **exec shell 支持面有限**：普通引号、初始环境变量展开、`;`/`&&`/`||`、缓冲管道、`<`/`>`/`>>`、`1>&2`/`2>&1`、局部 `cd`。命令替换、通配符、循环未实现——补语法须同步 README 能力清单与用例。
-- **fd 0 暂存**：spawnSync 输入经 `pkg_stageStdin` 暂存，虚拟命令 `readFileSync(0)` 同步可读，写侧 EBADF；释放时机与 `pkg_releaseStdin` 配对。
+- **fd 0 暂存**：命令输入经 `pkg_stageStdin` 暂存，虚拟命令显式用 `liteFs.readFileSync(0)` 同步读取，写侧 EBADF；释放时机与 `pkg_releaseStdin` 配对。
 - **Git 锁语义**：add/rm/commit 独占索引锁；status 简化可选锁模型（默认尝试持锁、被占继续读）。扩展其他写命令的锁语义时在头注释声明口径。
 - **ESLint 真实引擎委托**：内存 ESLint 委托宿主 node_modules 的 eslint 包（Linter 类纯内存，不 import 其磁盘文件面）——`.eslintrc.json` 不支持；`eslint.config.mjs` 与规则模块经同步迷你加载器执行（仅顶部单行 import：`node:*`/内存卷路径（含具名导出与 named import）/npm 包——解析基按序为宿主入口脚本 → 宿主 cwd → 本库自身，覆盖 node_modules 安装与源码直连/file: 软链接两种形态）；`node:fs`/`fs` 注入 lite-fs 门面（mock 后规则读内存卷）；files/ignores/languageOptions、espree AST visitor、schema 校验、内联 disable 指令全部真实口径（带 options 的规则须声明 meta.schema）；文本类 report 顶层 line/column 简写按 1 基自动转引擎 0 基 loc；卷内模块按路径在单次命令内缓存（同文件多次导入同一实例）；源码改写基于代码上下文掩码（字符串/模板/正则/注释内的 export default、import.meta 不误伤）；无子命令，故无 `subcommand` 故障匹配、无 checkpoint 注入。改执行机制须同步头注释与 README。
 - **缩进不统一**（2/4 空格混存）：跟随所在文件，不顺手全局统一。

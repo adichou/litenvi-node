@@ -546,6 +546,186 @@ test('realpathSync：软链解析与原生一致、循环 ELOOP、缺失 ENOENT'
   } finally { liteFs.t_unmock(); }
 });
 
+/** 场景：mkdir/rename/append/rm 的边缘口径与真实 fs 对照（node:fs 文档 mkdirSync/renameSync/
+ * appendFileSync/rmSync：https://nodejs.org/api/fs.html#fsmkdirsyncpath-options /
+ * https://nodejs.org/api/fs.html#fsrenamesyncoldpath-newpath /
+ * https://nodejs.org/api/fs.html#fsappendfilesyncpath-data-options /
+ * https://nodejs.org/api/fs.html#fsrmsyncpath-options）——recursive 返回首个新建目录、
+ * 非递归 EEXIST、rename 覆盖既有目标的 EISDIR/ENOTDIR/ENOTEMPTY、append 对缺失路径建文件、
+ * rm 的 ERR_FS_EISDIR/force 静默。 */
+test('真实 FS 对照：mkdir 返回值、rename 覆盖口径、append 建文件与 rm 边缘', () => {
+  const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-fs-doc-mkdir-'));
+  const scenario = (fileSystem, root) => {
+    const observed = [];
+    const normalize = value => typeof value === 'string' ? value.replaceAll(root, '<root>') : value;
+    const run = (name, ...args) => {
+      try { observed.push({ name, value: normalize(fileSystem[name](...args)) }); }
+      catch (error) { observed.push({ name, code: error.code, syscall: error.syscall }); }
+    };
+    fileSystem.mkdirSync(root, { recursive: true }); // 建根（不记账：mock 与原生根的建立时机不同源）
+    // 输入：recursive 建目录的返回值与幂等重放、非递归 EEXIST、缺失父目录 ENOENT、对文件 mkdir
+    run('mkdirSync', root + '/a/b/c', { recursive: true });
+    run('mkdirSync', root + '/a/b/c', { recursive: true });
+    run('mkdirSync', root + '/a/b/c');
+    run('mkdirSync', root + '/x/y');
+    fileSystem.writeFileSync(root + '/a/file', 'data');
+    run('mkdirSync', root + '/a/file');
+    // 输入：append 到缺失路径应建文件（文档：appendFileSync 文件不存在时创建）
+    run('appendFileSync', root + '/appended', 'x');
+    run('readFileSync', root + '/appended', 'utf8');
+    // 输入：rename 文件到缺失目标（成功）、文件覆盖既有文件（静默替换）、文件落到目录（EISDIR）、
+    // 目录落到文件（ENOTDIR）、空目录并入空目录（成功）、非空目录落到非空目录（ENOTEMPTY）
+    fileSystem.writeFileSync(root + '/v1', 'v1');
+    run('renameSync', root + '/v1', root + '/moved');
+    fileSystem.writeFileSync(root + '/replaced', 'old');
+    run('renameSync', root + '/moved', root + '/replaced');
+    run('readFileSync', root + '/replaced', 'utf8');
+    fileSystem.mkdirSync(root + '/adir');
+    fileSystem.writeFileSync(root + '/adir/inner', 'i');
+    run('renameSync', root + '/replaced', root + '/adir');
+    fileSystem.writeFileSync(root + '/plain', 'p');
+    fileSystem.mkdirSync(root + '/srcdir');
+    fileSystem.writeFileSync(root + '/srcdir/inner', 'i');
+    run('renameSync', root + '/srcdir', root + '/plain');
+    fileSystem.mkdirSync(root + '/empty');
+    fileSystem.mkdirSync(root + '/empty2');
+    run('renameSync', root + '/empty', root + '/empty2');
+    fileSystem.mkdirSync(root + '/occupied');
+    fileSystem.writeFileSync(root + '/occupied/keep', 'k');
+    fileSystem.mkdirSync(root + '/occupied2');
+    fileSystem.writeFileSync(root + '/occupied2/mine', 'm');
+    run('renameSync', root + '/occupied', root + '/occupied2');
+    // 输入：rm 空目录非递归（ERR_FS_EISDIR，force 亦然）、缺失路径（ENOENT，force 静默）、递归删除
+    fileSystem.mkdirSync(root + '/rmme');
+    run('rmSync', root + '/rmme');
+    run('rmSync', root + '/rmme', { force: true });
+    run('rmSync', root + '/missing-rm');
+    run('rmSync', root + '/missing-rm', { force: true });
+    run('rmSync', root + '/adir', { recursive: true });
+    run('existsSync', root + '/adir');
+    return observed;
+  };
+  try {
+    const expected = scenario(realFs, realFs.realpathSync(temporary));
+    liteFs.t_mock({ exclude: [EXCLUDED] });
+    try {
+      // 预期：返回值、错误 code/syscall 与副作用均与真实 fs 一致
+      assert.deepEqual(scenario(liteFs, '/mock/fs-mkdir'), expected, 'mkdir/rename/append/rm 边缘口径应与真实 fs 一致');
+    } finally { liteFs.t_unmock(); }
+  } finally { realFs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+/** 场景：stat/lstat/utimes/access/copyFile 与真实 fs 对照（node:fs 文档 fs.Stats/utimesSync/
+ * accessSync/copyFileSync：https://nodejs.org/api/fs.html#class-fsstats /
+ * https://nodejs.org/api/fs.html#fsutimessyncpath-atime-mtime /
+ * https://nodejs.org/api/fs.html#fsaccesssyncpath-mode /
+ * https://nodejs.org/api/fs.html#fscopyfilesyncsrc-dest-mode）——statSync 跟随符号链接
+ * （size 为目标内容长、中段目录链接可穿）、lstat 保留链接条目且 size 为目标字符串字节长、
+ * utimes 回写 mtimeMs、EXCL 复制 EEXIST。 */
+test('真实 FS 对照：stat 跟随链接、lstat 链接条目、utimes 回写与 EXCL 复制', () => {
+  const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-fs-doc-stat-'));
+  const scenario = (fileSystem, root) => {
+    const observed = [];
+    const run = (name, ...args) => {
+      try { observed.push({ name, value: fileSystem[name](...args) }); }
+      catch (error) { observed.push({ name, code: error.code, syscall: error.syscall }); }
+    };
+    const shape = get => {
+      try { const st = get(); return { isFile: st.isFile(), isDirectory: st.isDirectory(), isSymbolicLink: st.isSymbolicLink(),
+        size: st.size, mtimeIsDate: st.mtime instanceof Date, mtimeMsIsNumber: typeof st.mtimeMs === 'number' }; }
+      catch (error) { return { code: error.code, syscall: error.syscall }; }
+    };
+    fileSystem.mkdirSync(root, { recursive: true });
+    fileSystem.writeFileSync(root + '/file', '12345');
+    // 输入：常规文件 stat 形状（类型谓词、size、时间字段类型）
+    observed.push({ stat: shape(() => fileSystem.statSync(root + '/file')) });
+    // 输入：utimes 以 Date 形态回写后 stat mtimeMs 精确可读（数字形态原生按秒、卷内按毫秒，为
+    // 头注释声明的偏差口径，不纳入对照）
+    fileSystem.utimesSync(root + '/file', new Date(0), new Date(1234567890123));
+    const written = fileSystem.statSync(root + '/file');
+    // 预期：毫秒精度一致即可（原生经 APFS 纳秒存储回读带 <1ms 浮点噪声，取整归一）
+    observed.push({ mtimeMs: Math.round(written.mtimeMs),
+      iso: new Date(Math.round(written.mtimeMs)).toISOString() });
+    run('utimesSync', root + '/missing-utimes', 0, 0);
+    // 输入：statSync 跟随链接链（末段文件链接、中段目录链接、悬空、自指循环），lstat 保留链接条目
+    // （链接目标用相对串：lstat size 为目标字符串字节长，两侧目标串须等长才可比）
+    fileSystem.symlinkSync('file', root + '/link');
+    observed.push({ statLink: shape(() => fileSystem.statSync(root + '/link')), lstatLink: shape(() => fileSystem.lstatSync(root + '/link')) });
+    fileSystem.mkdirSync(root + '/dir');
+    fileSystem.writeFileSync(root + '/dir/inner', 'abcde');
+    fileSystem.symlinkSync('dir', root + '/dlink');
+    observed.push({ statThroughDirLink: shape(() => fileSystem.statSync(root + '/dlink/inner')) });
+    fileSystem.symlinkSync('nowhere', root + '/dangling');
+    observed.push({ statDangling: shape(() => fileSystem.statSync(root + '/dangling')), lstatDangling: shape(() => fileSystem.lstatSync(root + '/dangling')) });
+    fileSystem.symlinkSync('cycle', root + '/cycle');
+    observed.push({ statCycle: shape(() => fileSystem.statSync(root + '/cycle')), lstatCycle: shape(() => fileSystem.lstatSync(root + '/cycle')) });
+    // 输入：accessSync 既有文件/目录与缺失路径（W_OK/R_OK 模式参数两侧同传）
+    run('accessSync', root + '/file');
+    run('accessSync', root + '/dir', fileSystem.constants.W_OK);
+    run('accessSync', root + '/missing-access', fileSystem.constants.R_OK);
+    // 输入：copyFileSync 无标志覆盖、EXCL 目标已存在 EEXIST、源缺失 ENOENT
+    run('copyFileSync', root + '/file', root + '/copy');
+    run('readFileSync', root + '/copy', 'utf8');
+    run('copyFileSync', root + '/file', root + '/copy', fileSystem.constants.COPYFILE_EXCL);
+    run('copyFileSync', root + '/missing-copy-source', root + '/copy2');
+    return observed;
+  };
+  try {
+    const expected = scenario(realFs, realFs.realpathSync(temporary));
+    liteFs.t_mock({ exclude: [EXCLUDED] });
+    try {
+      // 预期：stat 类型/size、链接解析、错误 code/syscall 与复制覆盖语义均一致
+      assert.deepEqual(scenario(liteFs, '/mock/fs-stat'), expected, 'stat/utimes/access/copyFile 口径应与真实 fs 一致');
+    } finally { liteFs.t_unmock(); }
+  } finally { realFs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+/** 场景：fd 读面与真实 fs 对照（node:fs 文档 openSync/readSync/closeSync：
+ * https://nodejs.org/api/fs.html#fsopensyncpath-flags-mode /
+ * https://nodejs.org/api/fs.html#fsreadsyncfd-buffer-offset-length-position /
+ * https://nodejs.org/api/fs.html#fsclosesyncfd）——显式 position 定位读、EOF 返回 0、
+ * 关闭后读写 EBADF、wx 排他创建 EEXIST。（lite fd 不维护游标为头注释声明的偏差口径，
+ * 缺省 position 不纳入对照。） */
+test('真实 FS 对照：fd 定位读、EOF、关闭后 EBADF 与 wx 排他创建', () => {
+  const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-fs-doc-fd-'));
+  const scenario = (fileSystem, root) => {
+    const observed = [];
+    const run = (name, ...args) => {
+      try { observed.push({ name, value: fileSystem[name](...args) }); }
+      catch (error) { observed.push({ name, code: error.code, syscall: error.syscall }); }
+    };
+    fileSystem.mkdirSync(root, { recursive: true });
+    // 输入：w+ 打开缺失文件（创建）、经 fd 写入、显式 position 定位读与 EOF 读
+    const fd = fileSystem.openSync(root + '/log', 'w+');
+    fileSystem.writeFileSync(fd, 'abcdef');
+    const buffer = Buffer.alloc(8);
+    const read = (length, position) => {
+      const taken = fileSystem.readSync(fd, buffer, 0, length, position);
+      return [taken, buffer.toString('utf8', 0, taken)];
+    };
+    observed.push({ read0: read(3, 0), read3: read(5, 3), readFar: read(5, 100) });
+    // 输入：关闭后再读/写（EBADF）、wx 排他创建（EEXIST 与成功创建）
+    fileSystem.closeSync(fd);
+    observed.push({ readClosed: (() => { try { fileSystem.readSync(fd, buffer, 0, 3, 0); return 'ok'; } catch (error) { return error.code; } })() });
+    run('writeFileSync', fd, 'x');
+    run('openSync', root + '/log', 'wx');
+    const exclusive = fileSystem.openSync(root + '/exclusive', 'wx');
+    fileSystem.writeFileSync(exclusive, 'z');
+    fileSystem.closeSync(exclusive);
+    run('readFileSync', root + '/exclusive', 'utf8');
+    run('openSync', root + '/missing-open', 'r');
+    return observed;
+  };
+  try {
+    const expected = scenario(realFs, realFs.realpathSync(temporary));
+    liteFs.t_mock({ exclude: [EXCLUDED] });
+    try {
+      // 预期：定位读字节与内容、EOF 0、EBADF/EEXIST/ENOENT 均与真实 fs 一致（fd 数值本身不比）
+      assert.deepEqual(scenario(liteFs, '/mock/fs-fd'), expected, 'fd 读面口径应与真实 fs 一致');
+    } finally { liteFs.t_unmock(); }
+  } finally { realFs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-fs.mjs 导入的
  * 门面与库内部相对导入必须是同一实例，否则内存世界会静默分裂（exports 变动先红）。 */
 test('包自引用 specifier 与相对导入共享同一单例', async () => {

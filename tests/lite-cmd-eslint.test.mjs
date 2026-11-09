@@ -11,12 +11,20 @@
 // import.meta.url/dirname 注入为卷内路径）。夹具（lint-rules/no-trailing-spaces.mjs 文本规则 +
 // 使用方项目同构配置）由用例写入内存卷验证全链路；--format stylish|json、--max-warnings 与 0/1/2
 // 退出码为近似口径，错误统计（fatal/fixable）为真实值。
-// 前置：宿主须安装 eslint（仓库 devDependency）；与 git 用例不同，不做原生 ESLint CLI 对照。
+// 前置：宿主须安装 eslint（仓库 devDependency）；引擎事实面（退出码 0/1/2、JSON 交集字段、
+// stylish 计数行、向上查找配置）由「真实 ESLint 对照」用例经宿主真实 eslint CLI 逐值核对
+//（eslint.org 文档：https://eslint.org/docs/latest/use/command-line-interface#exit-codes），
+// 输出排版（stylish 对齐、JSON 超集字段、fatal 消息措辞）仍为近似口径。
+// 第三方 npm 插件只验证加载、配置与规则接线，不要求接管其内部原生 I/O；自研插件的业务
+// 逻辑通过显式 lite 组件测试。加载器已声明的 fs 注入兼容行为另由对应门面用例验证。
 // 用例注释格式：方法级写测试场景；语句中「输入」部分标记输入；断言按「预期 1/2/…」逐条注释。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import nativeFs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync as nativeSpawnSync } from 'node:child_process';
+import { nativeReferenceEnv } from './native-reference-env.mjs';
 import liteChildProcess from '../lite-child_process.mjs';
 import { t_install } from '../lite-cmd-eslint.mjs';
 import mgr from '../lite-cmd-mgr.mjs';
@@ -27,6 +35,9 @@ import liteFs from '../lite-fs.mjs';
 // 不依赖「卷内无 /mock-cmd 才触发」的惰性安装时序。收尾卸载子进程运行态并摘除钩子。
 // 卷排除本仓库根（真实文件不落卷）
 const REAL_ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
+// 临时夹具目录由环境变量提供，未设置时使用平台默认位置，不依赖 node:os。
+const TEMP_ROOT = path.resolve(process.env.TMPDIR || process.env.TEMP || process.env.TMP
+  || (process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'Temp') : '/tmp'));
 function setup() {
   liteFs.t_mock({ exclude: [REAL_ROOT] });
   liteFs.mkdirSync('/mock/project', { recursive: true });
@@ -911,6 +922,184 @@ test('源码转换不误伤 if 条件后的正则', function testRegexAfterIfPre
   }
 });
 
+/** 场景：files 使用标准花括号 glob 时，目录检查仍发现 js/mjs 文件并执行规则，不能空报告通过。 */
+test('标准 glob 不应漏查 js 与 mjs', function testBraceGlobDoesNotSkipManagedFiles() {
+  liteChildProcess.t_unmock();
+  liteFs.t_unmock();
+  const done = setup();
+  try {
+    const eslint = volumeEslint('/mock/project');
+    // 输入：只有包含花括号 glob 的配置分区，两个目标文件均包含 debugger。
+    write('/mock/project', 'eslint.config.mjs', "export default [{ files: ['**/*.{js,mjs}'], rules: { 'no-debugger': 'error' } }];\n");
+    write('/mock/project', 'src/a.js', 'debugger;\n');
+    write('/mock/project', 'src/b.mjs', 'debugger;\n');
+    const result = eslint(['.', '--format', 'json']);
+    // 预期 1：两个受管扩展名都被发现并报告规则错误，不能以空文件集合返回成功。
+    assert.equal(result.status, 1, `花括号 glob 下的 debugger 必须检出：${result.stderr}`);
+    assert.equal(result.stderr, '', '标准花括号 glob 不应导致配置或加载错误');
+    const reports = JSON.parse(result.stdout);
+    const violations = reports.filter(report => report.messages.length > 0);
+    assert.deepEqual(violations.map(report => report.filePath).sort(), [
+      '/mock/project/src/a.js',
+      '/mock/project/src/b.mjs',
+    ], 'js 与 mjs 文件都应产生违规报告，合法配置自身不应报错');
+    for (const report of violations) {
+      assert.equal(report.errorCount, 1, `${report.filePath} 应恰好报告一个 debugger 错误`);
+      assert.equal(report.messages.length, 1, `${report.filePath} 不应附带额外诊断`);
+      assert.equal(report.messages[0].ruleId, 'no-debugger', `${report.filePath} 应由真实 no-debugger 规则检出`);
+      assert.equal(report.messages[0].fatal, false, `${report.filePath} 不应以解析错误代替规则检出`);
+    }
+
+    // 输入：修复两个目标，保留相同的 glob 和目录检查入口。
+    write('/mock/project', 'src/a.js', 'const value = 1;\n');
+    write('/mock/project', 'src/b.mjs', 'const value = 2;\n');
+    const recovered = eslint(['.', '--format', 'json']);
+    // 预期 2：修复后通过，两个文件仍真实出现在检查结果中，不能因遗漏而通过。
+    assert.equal(recovered.status, 0, `花括号 glob 下修复后的文件应通过：${recovered.stderr}`);
+    assert.equal(recovered.stderr, '', '修复后的 glob 检查不应有执行错误');
+    const cleanReports = JSON.parse(recovered.stdout);
+    for (const file of ['/mock/project/src/a.js', '/mock/project/src/b.mjs']) {
+      const report = cleanReports.find(entry => entry.filePath === file);
+      assert.ok(report, `修复后仍应检查 ${file}`);
+      assert.deepEqual(report.messages, [], `${file} 修复后不应有诊断`);
+    }
+  } finally {
+    done();
+  }
+});
+
+/** 场景：导出变量被模块函数更新后，具名导入应观察到新值并据此启用规则，而非保留导入时快照。 */
+test('具名导入保留导出变量的动态绑定', function testNamedImportPreservesLiveBinding() {
+  liteChildProcess.t_unmock();
+  liteFs.t_unmock();
+  const done = setup();
+  try {
+    const eslint = volumeEslint('/mock/project');
+    // 输入：enabled 初始为 false；配置调用 enable 后应读到 true 并启用 no-debugger。
+    write('/mock/project', 'settings.mjs', [
+      'export let enabled = false;',
+      'export function enable() { enabled = true; }',
+      '',
+    ].join('\n'));
+    write('/mock/project', 'eslint.config.mjs', [
+      "import { enabled, enable } from './settings.mjs';",
+      'enable();',
+      "export default [{ rules: { 'no-debugger': enabled ? 'error' : 'off' } }];",
+      '',
+    ].join('\n'));
+    write('/mock/project', 'a.js', 'debugger;\n');
+    const result = eslint(['a.js', '--format', 'json']);
+    // 预期 1：读取更新后的绑定，debugger 应报错；不能因旧值 false 关闭规则而通过。
+    assert.equal(result.status, 1, `具名导入应观察 enable 修改后的 enabled：${result.stderr}`);
+    assert.equal(result.stderr, '', '合法动态绑定不应导致配置加载错误');
+    const reports = JSON.parse(result.stdout);
+    assert.equal(reports.length, 1, '动态绑定检查应只报告显式指定的 a.js');
+    assert.equal(reports[0].filePath, '/mock/project/a.js', '规则错误应归属 a.js');
+    assert.equal(reports[0].errorCount, 1, 'enabled 更新后应启用规则并报告一个错误');
+    assert.equal(reports[0].messages.length, 1, 'debugger 应恰好产生一条诊断');
+    assert.equal(reports[0].messages[0].ruleId, 'no-debugger', '更新后的绑定应启用真实 no-debugger 规则');
+    assert.equal(reports[0].messages[0].fatal, false, '动态绑定用例不应以解析错误代替规则检出');
+
+    // 输入：保留配置与动态绑定，将目标修复为无 debugger 的合法源码。
+    write('/mock/project', 'a.js', 'const value = 1;\n');
+    const clean = eslint(['a.js', '--format', 'json']);
+    // 预期 2：启用规则不意味着无条件失败，合法源码仍正常通过。
+    assert.equal(clean.status, 0, `动态绑定配置下的合法源码应通过：${clean.stderr}`);
+    assert.equal(clean.stderr, '', '动态绑定配置的合法对照不应有执行错误');
+    assert.deepEqual(JSON.parse(clean.stdout)[0].messages, [], '合法源码不应产生 no-debugger 诊断');
+  } finally {
+    done();
+  }
+});
+
+/** 场景：值为 undefined 的具名导出仍然存在，能正常导入并决定规则配置；真正缺失的导出才报错。 */
+test('值为 undefined 的具名导出仍可导入', function testUndefinedNamedExportIsNotMissing() {
+  liteChildProcess.t_unmock();
+  liteFs.t_unmock();
+  const done = setup();
+  try {
+    const eslint = volumeEslint('/mock/project');
+    // 输入：optional 明确导出且值为 undefined，配置应据此启用 no-debugger。
+    write('/mock/project', 'settings.mjs', 'export const optional = undefined;\n');
+    write('/mock/project', 'eslint.config.mjs', [
+      "import { optional } from './settings.mjs';",
+      "export default [{ rules: { 'no-debugger': optional === undefined ? 'error' : 'off' } }];",
+      '',
+    ].join('\n'));
+    write('/mock/project', 'a.js', 'debugger;\n');
+    const result = eslint(['a.js', '--format', 'json']);
+    // 预期 1：导出存在性与值分开判断，undefined 不应被误判为缺失导出导致 fatal。
+    assert.equal(result.status, 1, `合法的 undefined 导出应加载成功并启用规则：${result.stderr}`);
+    assert.equal(result.stderr, '', '值为 undefined 的合法导出不应报告加载错误');
+    const reports = JSON.parse(result.stdout);
+    assert.equal(reports.length, 1, 'undefined 导出用例应只检查 a.js');
+    assert.equal(reports[0].messages.length, 1, 'undefined 条件启用规则后应报告一条 debugger 诊断');
+    assert.equal(reports[0].messages[0].ruleId, 'no-debugger', '错误应来自 no-debugger，而非导入或解析失败');
+    assert.equal(reports[0].messages[0].fatal, false, '合法 undefined 导出不应产生 fatal');
+
+    // 输入：移除 optional 导出，只保留另一个同为 undefined 的导出，配置导入保持不变。
+    write('/mock/project', 'settings.mjs', 'export const another = undefined;\n');
+    const missing = eslint(['a.js', '--format', 'json']);
+    // 预期 2：真正不存在的导出仍须明确失败，不能给所有缺失名称静默补 undefined。
+    assert.equal(missing.status, 2, '真正缺少 optional 导出时应返回配置 fatal');
+    assert.equal(missing.stdout, '', '缺失导出不应伪造 lint 文件报告');
+    assert.match(missing.stderr, /optional/, '缺失导出的诊断应指出 optional 名称');
+  } finally {
+    done();
+  }
+});
+
+/** 场景：全局 ignores 排除的文件不应被读取；对其注入 EACCES 不能使合法项目检查失败。 */
+test('忽略文件不应触发读取或权限错误', function testIgnoredFilesAreNotRead() {
+  liteChildProcess.t_unmock();
+  liteFs.t_unmock();
+  const done = setup();
+  let remove;
+  try {
+    const eslint = volumeEslint('/mock/project');
+    // 输入：合法业务文件和被全局忽略的违规文件；任何读取忽略文件的尝试均记账并抛 EACCES。
+    write('/mock/project', 'eslint.config.mjs', "export default [{ ignores: ['ignored/**'] }, { rules: { 'no-debugger': 'error' } }];\n");
+    write('/mock/project', 'main.js', 'const value = 1;\n');
+    write('/mock/project', 'ignored/no-access.js', 'debugger;\n');
+    let ignoredReads = 0;
+    remove = liteFs.t_inject({
+      op: 'readFileSync',
+      matches(target) {
+        if (target !== '/mock/project/ignored/no-access.js') return false;
+        ignoredReads += 1;
+        return true;
+      },
+      code: 'EACCES',
+    });
+    const result = eslint(['.', '--format', 'json']);
+    // 预期 1：应用忽略规则后再读取文件，忽略文件零读取且不影响合法项目通过。
+    assert.equal(result.status, 0, `忽略文件的读取权限不应阻断检查：${result.stderr}`);
+    assert.equal(result.stderr, '', '被忽略文件的 EACCES 不应出现在执行错误中');
+    assert.equal(ignoredReads, 0, '全局 ignores 排除的文件应完全不触发 readFileSync');
+    const reports = JSON.parse(result.stdout);
+    assert.ok(reports.some(report => report.filePath === '/mock/project/main.js'), '合法业务文件仍应真实进入检查');
+    assert.equal(reports.some(report => report.filePath.includes('/ignored/')), false, '忽略文件不应进入 JSON 报告');
+    for (const report of reports) {
+      assert.deepEqual(report.messages, [], `${report.filePath} 的合法内容不应产生诊断`);
+    }
+
+    // 输入：保留忽略文件的故障注入，只在受管 main.js 中增加 debugger。
+    write('/mock/project', 'main.js', 'debugger;\n');
+    const violation = eslint(['.', '--format', 'json']);
+    // 预期 2：忽略文件始终零读取，受管文件的真实规则错误仍被正常报告。
+    assert.equal(violation.status, 1, `main.js 的 debugger 应正常检出：${violation.stderr}`);
+    assert.equal(violation.stderr, '', '受管文件违规不应变成忽略文件的权限错误');
+    assert.equal(ignoredReads, 0, '受管文件违规时也不应读取忽略文件');
+    const violations = JSON.parse(violation.stdout).filter(report => report.messages.length > 0);
+    assert.equal(violations.length, 1, '应只有受管 main.js 产生规则诊断');
+    assert.equal(violations[0].filePath, '/mock/project/main.js', '规则错误应归属 main.js');
+    assert.equal(violations[0].messages[0].ruleId, 'no-debugger', '应报告真实 no-debugger 规则错误');
+  } finally {
+    remove?.();
+    done();
+  }
+});
+
 /** 场景：--format json 输出 results 数组（含干净文件），消息与计数字段齐全且按 (line, column) 排序。 */
 test('--format json 输出结构', () => {
   const done = setup();
@@ -1086,6 +1275,126 @@ test('异步 spawn 与同步结果一致', async () => {
   } finally {
     done();
   }
+});
+
+// 原生 ESLint CLI 对照夹具：宿主 devDependencies 的真实 eslint 可执行文件（flat config 同构夹具）
+const ESLINT_BIN = path.join(REAL_ROOT, 'node_modules', '.bin', 'eslint');
+
+/** 场景：退出码与 JSON 报告的引擎事实与真实 ESLint CLI 对照（eslint.org 文档 CLI「Exit Codes」
+ * 与内置 formatter：https://eslint.org/docs/latest/use/command-line-interface#exit-codes /
+ * https://eslint.org/docs/latest/use/formatters）——干净 0 / 存在 error 或 warning 超
+ * --max-warnings 1 / fatal 2；JSON 交集字段（filePath、ruleId/severity/line/column/message/
+ * fatal、errorCount/warningCount/fatalErrorCount）来自同一真实引擎，应逐值一致。声明为
+ * 近似口径的格式排版面（endLine/suggestions/source 等超集字段、fatal 消息措辞）不纳入对照。 */
+test('真实 ESLint 对照：退出码口径与 JSON 报告引擎事实', () => {
+  const temporary = nativeFs.mkdtempSync(path.join(TEMP_ROOT, 'lite-eslint-reference-'));
+  const realRoot = nativeFs.realpathSync(temporary);
+  const configSource = `export default [{
+  files: ['**/*.js'],
+  languageOptions: { ecmaVersion: 'latest', sourceType: 'commonjs' },
+  rules: { 'no-debugger': 'error', 'no-unused-vars': 'warn' },
+}];
+`;
+  nativeFs.writeFileSync(path.join(realRoot, 'eslint.config.mjs'), configSource);
+  nativeFs.writeFileSync(path.join(realRoot, 'clean.js'), 'var ok = 2;\n');
+  nativeFs.writeFileSync(path.join(realRoot, 'broken.js'), 'debugger;\nvar x = 1;\n');
+  nativeFs.writeFileSync(path.join(realRoot, 'syntax.js'), 'var var var;\n');
+  const scenario = memory => {
+    const observations = [];
+    const run = argv => {
+      const result = memory
+        ? liteChildProcess.spawnSync('eslint', argv, { cwd: '/mock/project', encoding: 'utf8' })
+        : nativeSpawnSync(process.execPath, [ESLINT_BIN, ...argv], { cwd: realRoot, env: nativeReferenceEnv(), encoding: 'utf8' });
+      return result;
+    };
+    // 输入：干净文件 / 违规文件 / 仅警告超限 / 语法错误（fatal）/ 缺配置（fatal）
+    observations.push({ clean: run(['clean.js', '--format', 'json']).status });
+    const mixed = run(['clean.js', 'broken.js', '--format', 'json']);
+    const report = JSON.parse(mixed.stdout).map(entry => ({
+      file: path.basename(entry.filePath),
+      counts: [entry.errorCount, entry.warningCount, entry.fatalErrorCount, entry.fixableErrorCount, entry.fixableWarningCount],
+      messages: entry.messages.map(message => ({ ruleId: message.ruleId, severity: message.severity,
+        line: message.line, column: message.column, message: message.message, fatal: message.fatal ?? false })),
+    })).sort((a, b) => a.file.localeCompare(b.file));
+    observations.push({ mixedStatus: mixed.status, report });
+    const fatal = run(['syntax.js', '--format', 'json']);
+    observations.push({ fatalStatus: fatal.status,
+      fatalMessage: JSON.parse(fatal.stdout)[0].messages.map(message => ({
+        ruleId: message.ruleId, severity: message.severity, fatal: message.fatal ?? false,
+        message: /Parsing error/.test(message.message) ? 'Parsing error' : message.message })) });
+    observations.push({ warningsLimited: run(['--max-warnings', '0', 'broken.js']).status,
+      warningsAllowed: run(['--max-warnings', '1', 'broken.js']).status });
+    // 输入：子目录请求命中向上查找的父级配置（0）；真隔离目录无任何配置（fatal 2）
+    observations.push({ upwardSearch: (() => {
+      const nested = memory ? '/mock/project/nested' : path.join(realRoot, 'nested');
+      (memory ? liteFs : nativeFs).mkdirSync(nested, { recursive: true });
+      (memory ? liteFs : nativeFs).writeFileSync(path.join(nested, 'd.js'), 'var q = 1;\n');
+      return (memory
+        ? liteChildProcess.spawnSync('eslint', ['d.js'], { cwd: nested, encoding: 'utf8' })
+        : nativeSpawnSync(process.execPath, [ESLINT_BIN, 'd.js'], { cwd: nested, env: nativeReferenceEnv(), encoding: 'utf8' })).status;
+    })() });
+    observations.push({ noConfigAnyWhere: (() => {
+      const isolated = memory ? '/mock/isolated-no-config' : nativeFs.realpathSync(nativeFs.mkdtempSync(path.join(TEMP_ROOT, 'lite-eslint-bare-')));
+      (memory ? liteFs : nativeFs).mkdirSync(isolated, { recursive: true });
+      (memory ? liteFs : nativeFs).writeFileSync(path.join(isolated, 'd.js'), 'var q = 1;\n');
+      return (memory
+        ? liteChildProcess.spawnSync('eslint', ['d.js'], { cwd: isolated, encoding: 'utf8' })
+        : nativeSpawnSync(process.execPath, [ESLINT_BIN, 'd.js'], { cwd: isolated, env: nativeReferenceEnv(), encoding: 'utf8' })).status;
+    })() });
+    return observations;
+  };
+  try {
+    const expected = scenario(false);
+    const done = setup();
+    try {
+      write('/mock/project', 'eslint.config.mjs', configSource);
+      write('/mock/project', 'clean.js', 'var ok = 2;\n');
+      write('/mock/project', 'broken.js', 'debugger;\nvar x = 1;\n');
+      write('/mock/project', 'syntax.js', 'var var var;\n');
+      // 预期：退出码映射与 JSON 引擎事实（规则 ID、严重级、位置、消息、计数）与真实 CLI 一致
+      assert.deepEqual(scenario(true), expected, '内存 ESLint 退出码与 JSON 引擎事实应与真实 CLI 一致');
+    } finally { done(); }
+  } finally { nativeFs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+/** 场景：stylish 计数行与目标不匹配 fatal 与真实 ESLint CLI 对照（eslint.org 文档 formatter
+ * stylish、CLI 退出码：https://eslint.org/docs/latest/use/formatters /
+ * https://eslint.org/docs/latest/use/command-line-interface#exit-codes）——末行
+ * ✖ N problems (X errors, Y warnings) 与无匹配目标 exit 2。stylish 的列对齐排版为头注释
+ * 声明的简化口径，只比末行；无匹配目标的 fatal 消息措辞两侧各按声明（引号与提示行不同），
+ * 只比退出码。 */
+test('真实 ESLint 对照：stylish 计数行与无匹配目标退出码', () => {
+  const temporary = nativeFs.mkdtempSync(path.join(TEMP_ROOT, 'lite-eslint-stylish-'));
+  const realRoot = nativeFs.realpathSync(temporary);
+  const configSource = `export default [{
+  files: ['**/*.js'],
+  languageOptions: { ecmaVersion: 'latest', sourceType: 'commonjs' },
+  rules: { 'no-debugger': 'error', 'no-unused-vars': 'warn' },
+}];
+`;
+  nativeFs.writeFileSync(path.join(realRoot, 'eslint.config.mjs'), configSource);
+  nativeFs.writeFileSync(path.join(realRoot, 'broken.js'), 'debugger;\nvar x = 1;\n');
+  const scenario = memory => {
+    const run = argv => (memory
+      ? liteChildProcess.spawnSync('eslint', argv, { cwd: '/mock/project', encoding: 'utf8' })
+      : nativeSpawnSync(process.execPath, [ESLINT_BIN, ...argv], { cwd: realRoot, env: nativeReferenceEnv(), encoding: 'utf8' }));
+    const observations = {};
+    const stylish = run(['broken.js']);
+    observations.stylishTail = stylish.stdout.trimEnd().split('\n').at(-1);
+    observations.stylishStatus = stylish.status;
+    observations.noMatch = run(['missing-target']).status;
+    return observations;
+  };
+  try {
+    const expected = scenario(false);
+    const done = setup();
+    try {
+      write('/mock/project', 'eslint.config.mjs', configSource);
+      write('/mock/project', 'broken.js', 'debugger;\nvar x = 1;\n');
+      // 预期：stylish 末行计数与无匹配目标 exit 2 与真实 CLI 一致
+      assert.deepEqual(scenario(true), expected, '内存 ESLint stylish 计数行应与真实 CLI 一致');
+    } finally { done(); }
+  } finally { nativeFs.rmSync(temporary, { recursive: true, force: true }); }
 });
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-cmd-eslint.mjs 导入的

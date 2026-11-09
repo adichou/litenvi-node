@@ -3,7 +3,11 @@
 // 只接管「系统运行数据」。作用域为黑名单制：mock({ exclude }) 声明排除目录（模块源码、
 // 静态资源、代码 mtime 探测等系统本体所在），排除目录外**全部**落内存卷——测试世界的越界
 // 写不可能穿透真实磁盘（白名单口径曾让未声明路径静默走真实 fs，已废弃）。内存卷带真 fs
-// 错误语义（ENOENT/EEXIST/EISDIR/ENOTDIR/ENOTEMPTY/EBADF）。默认（未 mock）全量转发真实
+// 错误语义（ENOENT/EEXIST/EISDIR/ENOTDIR/ENOTEMPTY/EBADF）；statSync 逐段解析符号链接
+// （跟随链接链，循环 ELOOP、悬空 ENOENT；lstat 保留链接条目且 size 为目标字符串字节长）；
+// rename 覆盖既有目标按 rename(2) 口径（文件→目录 EISDIR、目录→文件 ENOTDIR、目录→非空
+// 目录 ENOTEMPTY）；copyFileSync 卷内支持 COPYFILE_EXCL（EEXIST），源缺失按 copyfile 口径
+// ENOENT。默认（未 mock）全量转发真实
 // node:fs，生产行为不变。错误注入是内存实现上的能力：inject({ op?, path?, code }) 对卷内
 // 命中操作抛指定 code 的 fs 错误（如 EACCES 模拟写入失败），返回移除函数；op 省略匹配全部
 // 操作，path 精确匹配。多路径操作默认按首个路径参数判定作用域；copyFileSync 从排除目录
@@ -221,7 +225,7 @@ function f_createMemoryFs() {
             f_guard('utimesSync', target);
             const hit = f_entryOf(target);
             if (!hit || !(hit.parent.files.has(hit.name) || hit.parent.dirs.has(hit.name)))
-                f_fail('ENOENT', 'utimes', target);
+                f_fail('ENOENT', 'utime', target); // 真实 utimes 的 syscall 标签为 utime
             // 卷内文件更新 mtimeMs；目录无时间面（f_statTimes 目录恒纪元 0 口径不变），记为 no-op。
             if (hit.parent.files.has(hit.name))
                 hit.parent.files.get(hit.name).mtimeMs = f_timeMsOf(mtime, 'mtime');
@@ -232,7 +236,7 @@ function f_createMemoryFs() {
             const hit = f_entryOf(target);
             if (!hit || !(hit.parent.dirs.has(hit.name) || hit.parent.files.has(hit.name))) {
                 if (!options.force)
-                    f_fail('ENOENT', 'rm', target);
+                    f_fail('ENOENT', 'lstat', target); // 真实 rm 先 lstat 探测目标，缺失按 lstat 口径报错
                 return;
             }
             if (hit.parent.dirs.has(hit.name) && !options.recursive) f_fail('ERR_FS_EISDIR', 'rm', target);
@@ -266,10 +270,22 @@ function f_createMemoryFs() {
                 f_fail('ENOENT', 'rename', from);
             if (!dst)
                 f_fail('ENOENT', 'rename', to);
-            if (dst.parent.files.has(dst.name))
+            const srcIsDir = src.parent.dirs.has(src.name);
+            // 覆盖口径与真实 rename(2) 一致：目录落到既有文件 ENOTDIR；文件落到既有目录 EISDIR；
+            // 目录落到非空目录 ENOTEMPTY；文件覆盖文件、目录并入空目录均静默替换
+            if (dst.parent.files.has(dst.name)) {
+                if (srcIsDir)
+                    f_fail('ENOTDIR', 'rename', to);
                 dst.parent.files.delete(dst.name);
-            if (dst.parent.dirs.has(dst.name))
+            }
+            if (dst.parent.dirs.has(dst.name)) {
+                if (!srcIsDir)
+                    f_fail('EISDIR', 'rename', to);
+                const target = dst.parent.dirs.get(dst.name);
+                if (target.dirs.size || target.files.size)
+                    f_fail('ENOTEMPTY', 'rename', to);
                 dst.parent.dirs.delete(dst.name);
+            }
             if (src.parent.files.has(src.name)) {
                 dst.parent.files.set(dst.name, src.parent.files.get(src.name));
                 src.parent.files.delete(src.name);
@@ -279,8 +295,14 @@ function f_createMemoryFs() {
             src.parent.dirs.delete(src.name);
         },
         // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-        copyFileSync(from, to) {
+        copyFileSync(from, to, mode = 0) {
             f_guard('copyFileSync', from);
+            // 卷内口径与真实 copyfile(2) 一致：源缺失 ENOENT、EXCL 目标已存在 EEXIST，
+            // syscall 均为 copyfile（跨边界路径由 f_copyFromReal 组装同口径错误）
+            if (!impl.existsSync(from))
+                f_fail('ENOENT', 'copyfile', from);
+            if ((mode & fs.constants.COPYFILE_EXCL) && impl.existsSync(to))
+                f_fail('EEXIST', 'copyfile', to);
             const content = impl.readFileSync(from);
             impl.writeFileSync(to, content);
         },
@@ -437,25 +459,54 @@ function f_createMemoryFs() {
             mtime: new Date(mtimeMs), atime: new Date(mtimeMs), birthtime: new Date(mtimeMs), ctime: new Date(mtimeMs),
         };
     }
+    // 私有方法：stat 路径解析——逐段行走（符号链接中段与末段按真实语义处理），回传最终条目。
+    // 与 f_readFileData 同构，但错误 syscall 按 stat/lstat 口径、末段链接按 linkOnly 决定是否解析。
+    function f_statEntry(target, linkOnly, syscall) {
+        let names = f_split(target), node = root, links = 0;
+        for (let i = 0; i < names.length; i++) {
+            const name = names[i], file = node.files.get(name);
+            if (file?.symlink !== undefined) {
+                if (linkOnly && i === names.length - 1)
+                    return { kind: 'symlink', file };
+                if (++links > 40) f_fail('ELOOP', syscall, target);
+                const parent = path.sep + names.slice(0, i).join(path.sep);
+                names = f_split(path.resolve(parent, file.symlink, ...names.slice(i + 1)));
+                node = root;
+                i = -1;
+            } else if (file) {
+                if (i < names.length - 1) f_fail('ENOTDIR', syscall, target);
+                return { kind: 'file', file };
+            } else {
+                const next = node.dirs.get(name);
+                if (!next) f_fail('ENOENT', syscall, target);
+                node = next;
+            }
+        }
+        return { kind: 'dir', node };
+    }
     // 私有方法：仅在本文件实现中使用，不导出。
     function f_stat(target, linkOnly) {
         f_guard(linkOnly ? 'lstatSync' : 'statSync', target);
-        const hit = f_entryOf(target);
-        if (hit && hit.parent.files.has(hit.name)) {
-            const file = hit.parent.files.get(hit.name);
+        const syscall = linkOnly ? 'lstat' : 'stat';
+        const hit = f_statEntry(target, linkOnly, syscall);
+        if (hit.kind === 'symlink')
+            // lstat 末段链接：不解析目标，size 为目标字符串字节长（对齐真实 lstat）
+            return {
+                isFile: () => false, isDirectory: () => false, isSymbolicLink: () => true,
+                size: Buffer.byteLength(String(hit.file.symlink)), ...f_statTimes(0),
+            };
+        if (hit.kind === 'file') {
+            const file = hit.file;
             const times = f_statTimes(file.mtimeMs);
             return {
-                isFile: () => true, isDirectory: () => false, isSymbolicLink: () => Boolean(file.symlink),
+                isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false,
                 size: file.data.length, ...times,
             };
         }
-        const node = f_dirOf(target);
-        if (node !== undefined)
-            return {
-                isFile: () => false, isDirectory: () => true, isSymbolicLink: () => false,
-                size: 0, ...f_statTimes(0),
-            };
-        f_fail('ENOENT', 'stat', target);
+        return {
+            isFile: () => false, isDirectory: () => true, isSymbolicLink: () => false,
+            size: 0, ...f_statTimes(0),
+        };
     }
     let fdSeq = 100;
     const fds = new Map();

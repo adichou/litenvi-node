@@ -633,6 +633,71 @@ test('服务关闭故障闸门延迟关闭回调并可释放', async () => {
   } finally { release(); liteServer.t_unmock(); liteHttp.t_unmock(); }
 });
 
+/** 场景：未运行时 close 与 handler 抛错对照（node:http 文档 server.close / Server 事件：
+ * https://nodejs.org/api/http.html#serverclosecallback）——未运行时 close 两侧都以
+ * ERR_SERVER_NOT_RUNNING 作为回调错误且不发 error 事件；handler 抛错为头注释声明的偏差
+ * 口径：原生同步抛出即 uncaughtException 崩溃进程（无法在共享测试进程内做原生对照），内存
+ * 服务按声明回 500 JSON { error: message }——同步抛错经 f_handle 的 Promise executor 转
+ * 拒绝、异步 handler 拒绝经 Promise.resolve(handled).catch，两条路径同口径（真回环 socket
+ * 与进程内直调各验一次）。 */
+test('真实 Server 对照：未运行 close 回调错误一致；handler 抛错按声明回 500 JSON', async () => {
+  const scenario = async memory => {
+    if (memory) { liteHttp.t_mock(); liteServer.t_mock(); }
+    const factory = memory ? liteServer : http;
+    const server = factory.createServer((_req, res) => res.end('ok'));
+    server.listen(0, '127.0.0.1');
+    await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
+    await new Promise(resolve => server.close(resolve));
+    // 输入：未运行状态再次 close，捕获 error 事件与回调错误
+    const again = await new Promise(resolve => {
+      let errorEvent = null;
+      server.once('error', error => { errorEvent = error.code; });
+      server.close(error => resolve({ errorEvent, callback: error ? error.code : null }));
+    });
+    if (memory) { liteHttp.t_unmock(); liteServer.t_unmock(); }
+    return { again };
+  };
+  // 预期 1：未运行时 close 的回调错误与事件面均与原生 Server 一致
+  const expected = await scenario(false);
+  assert.deepEqual(await scenario(true), expected, '未运行时 close 的回调错误应与原生 Server 一致');
+
+  // 输入：handler 同步抛错与异步拒绝（内存服务，真回环 socket 与进程内直调两条路径）
+  liteHttp.t_mock();
+  liteServer.t_mock();
+  try {
+    for (const mode of ['sync-throw', 'async-reject']) {
+      const handler = mode === 'sync-throw'
+        ? () => { throw new Error('handler boom'); }
+        : async () => { throw new Error('handler boom'); };
+      const server = liteServer.createServer(handler).listen(0);
+      await new Promise(resolve => server.once('listening', resolve));
+      // 预期 2：真回环 socket 请求收到 500 与错误正文（保护共享进程的连接面，声明偏差）
+      const socketView = await new Promise(resolve => {
+        http.request({ hostname: '127.0.0.1', port: server.port, path: '/boom', agent: false }, res => {
+          let body = '';
+          res.on('data', chunk => { body += chunk; });
+          res.on('end', () => resolve({ status: res.statusCode, body }));
+        }).on('error', error => resolve({ code: error.code })).end();
+        setTimeout(() => resolve({ timeout: true }), 2000);
+      });
+      assert.equal(socketView.status, 500, `${mode} 真回环 socket 应收到 500`);
+      assert.deepEqual(JSON.parse(socketView.body), { error: 'handler boom' }, `${mode} 真回环 socket 回包应为错误 JSON`);
+      // 预期 3：进程内直调同口径收到 500 与错误正文
+      const inProcess = await new Promise(resolve => {
+        liteHttp.request({ hostname: '127.0.0.1', port: server.port, path: '/boom' }, res => {
+          let body = '';
+          res.on('data', chunk => { body += chunk; });
+          res.on('end', () => resolve({ status: res.statusCode, body }));
+        }).on('error', error => resolve({ code: error.code })).end();
+        setTimeout(() => resolve({ timeout: true }), 2000);
+      });
+      assert.equal(inProcess.status, 500, `${mode} 进程内直调应收到 500`);
+      assert.deepEqual(JSON.parse(inProcess.body), { error: 'handler boom' }, `${mode} 进程内直调回包应为错误 JSON`);
+      await new Promise(resolve => server.close(resolve));
+    }
+  } finally { liteHttp.t_unmock(); liteServer.t_unmock(); }
+});
+
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-server.mjs 导入的
  * 门面与库内部相对导入必须是同一实例，否则服务账本会静默分裂（exports 变动先红）。 */
 test('包自引用 specifier 与相对导入共享同一单例', async () => {

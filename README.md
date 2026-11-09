@@ -21,11 +21,13 @@
 
 ## lite-fs 门面
 
-`litenvi-node/lite-fs.mjs` 是 `node:fs` 的可切换门面。`t_mock({ exclude: [...] })` 声明保留真实访问的源码或静态资源目录，排除目录之外的路径全部使用内存卷；未 mock 时透传真实文件系统。内存卷覆盖常用同步文件操作，并支持 `readdirSync(..., { withFileTypes: true })` 的文件、目录和符号链接类型。`copyFileSync` 从排除目录复制到内存路径时读取真实源、只写入内存目标，可用 `COPYFILE_EXCL` 防止覆盖；其他多路径操作仍按首个路径选择作用域。`t_inject({ op?, path?, code })` 可向内存操作注入错误，返回移除函数；内存范围内未实现的操作会明确报错。
+`litenvi-node/lite-fs.mjs` 是 `node:fs` 的可切换门面。`t_mock({ exclude: [...] })` 声明保留真实访问的源码或静态资源目录，排除目录之外的路径全部使用内存卷；未 mock 时透传真实文件系统。内存卷覆盖常用同步文件操作，并支持 `readdirSync(..., { withFileTypes: true })` 的文件、目录和符号链接类型；`statSync` 逐段解析符号链接（跟随链接链，循环 ELOOP；`lstatSync` 保留链接条目且 size 为目标字符串字节长），rename 覆盖既有目标按 rename(2) 口径报 EISDIR/ENOTDIR/ENOTEMPTY，错误码与 syscall 标签（如 `rm` 缺失的 `lstat`、`utimes` 缺失的 `utime`、`copyfile`）对齐原生。`copyFileSync` 从排除目录复制到内存路径时读取真实源、只写入内存目标，可用 `COPYFILE_EXCL` 防止覆盖（卷内复制同样支持 EXCL 与 copyfile 口径错误）；其他多路径操作仍按首个路径选择作用域。`t_inject({ op?, path?, code })` 可向内存操作注入错误，返回移除函数；内存范围内未实现的操作会明确报错。
 
 ## lite-child_process 执行接口
 
-`lite-child_process` 提供 `spawn/spawnSync`、`exec/execSync`、`execFile/execFileSync`。默认转发原生 Node；`t_mock()` 后全部经内存命令分派并统一记入 `t_calls()`，`t_reset()` 仅清账本。
+`lite-cmd-node` 在进程内执行完整脚本，提供命令参数、输入输出、退出、信号和资源生命周期；不再自动包装原生 `node:fs` 方法或改写其 ESM 具名导出。自研脚本须显式导入 `litenvi-node/lite-fs.mjs` 访问内存卷；`spawn` 的 `input` 仍可通过 `liteFs.readFileSync(0, 'utf8')` 同步读取。原生 `fs` 调用保持原生行为，第三方业务能力通过消费项目自己的代理控制，不能依赖虚拟 Node 自动隔离任意文件访问。
+
+`lite-child_process` 提供 `spawn/spawnSync`、`exec/execSync`、`execFile/execFileSync`。默认转发原生 Node；`t_mock()` 后全部经内存命令分派并统一记入 `t_calls()`，`t_reset()` 仅清账本。内存 `spawn` 支持 `options.timeout`：到期以 `killSignal`（缺省 `SIGTERM`）终止，`exit`/`close` 带信号、不发 `error` 事件，提前退出时撤销定时器（对齐原生）。
 
 `execFile(file, args?, options?, callback?)` 按字面 argv 执行，默认以 UTF-8 字符串回调 `(error, stdout, stderr)`；异步接口返回子进程，支持超时、AbortSignal、maxBuffer 和 `promisify`（Promise 上有 `child`，成功值为 `{ stdout, stderr }`）。同步接口默认返回 Buffer，非零退出或启动失败时抛出携带执行结果的错误。
 
@@ -67,9 +69,11 @@ ESLint 命令集同样需要显式安装：`import { t_install } from 'litenvi-n
 
 内存 ESLint 委托使用方 node_modules 里的真实 eslint 包（`Linter` 类纯内存引擎，不 import 其磁盘文件面）执行规则：espree AST 解析、esquery visitor、files/ignores/languageOptions、插件与选项 schema 校验、内联 disable 指令全部按真实引擎口径处理，规则诊断与 fatal/fixable 统计为真实值；宿主未安装 eslint 时明确报错。与 lite-fs 的对接缝有三处：被检文件与配置从内存卷读取、文本经 `Linter.verify` 进入引擎（filename 只用于配置匹配与消息显示，引擎不做 IO）；Linter 以执行 cwd 构建，config 的 files 相对模式按内存路径匹配；配置/规则模块 import 的 `node:fs`/`fs`（裸名）注入 lite-fs 门面（未 mock 时透传真实 fs，mock 后读内存卷）。全程不落真实磁盘。
 
-配置为 `eslint.config.mjs`（仅 .mjs），从执行 cwd 逐级向上查找或经 `--config <路径>` 显式指定，`export default` 须为数组。配置与规则/插件模块都取自内存卷，Node 原生 import() 无法读取，引擎以同步迷你加载器执行（近似 ESM）：仅支持文件顶部单行 import（default/named/namespace/副作用四种），specifier 支持 `node:*`、内存卷相对/绝对路径（递归加载、深度上限 16、环检测）与 npm 包（解析基按序：宿主进程入口脚本 → 宿主 cwd → 本库自身，覆盖 node_modules 安装与源码目录直连/file: 软链接两种引用形态——与项目真实 lint 同引擎同包；require(ESM) 需 Node ≥22.12，顶层 await 不支持）；多行 import、from 再导出、解构导出、动态 import() 明确报错；`import.meta.url/dirname` 注入为卷内路径。卷内模块支持 export default 与单行具名导出（const/let/var 多声明符、function/async function/class、`export { 别名列表 }`），named import 按导出名解析；同一命令内按规范化路径缓存卷内模块（同文件多次导入共享同一实例，身份稳定）。`export default` 捕获与 `import.meta` 注入基于代码上下文掩码——字符串/模板/正则/注释内的关键字不误伤。插件/规则/选项形态与 schema 校验按真实引擎口径——带 options 的规则须声明 meta.schema。规则接口即 ESLint 规则 API：规则文件 `export default { meta, create(context) }`，report 的顶层 `line`/`column` 简写按 1 基约定自动转为引擎坐标，`node`/`loc` 形态与 meta 原样透传；文本类规则与 AST visitor 规则均可执行。
+配置为 `eslint.config.mjs`（仅 .mjs），从执行 cwd 逐级向上查找或经 `--config <路径>` 显式指定，`export default` 须为数组。配置与规则/插件模块都取自内存卷，Node 原生 import() 无法读取，引擎以同步迷你加载器执行（近似 ESM）：仅支持文件顶部单行 import（default/named/namespace/副作用四种），specifier 支持 `node:*`、内存卷相对/绝对路径（递归加载、深度上限 16、环检测）与 npm 包（解析基按序：宿主进程入口脚本 → 宿主 cwd → 本库自身，覆盖 node_modules 安装与源码目录直连/file: 软链接两种引用形态——与项目真实 lint 同引擎同包；require(ESM) 需 Node ≥22.12，顶层 await 不支持）；多行 import、from 再导出、解构导出、动态 import() 明确报错；`import.meta.url/dirname` 注入为卷内路径。卷内模块支持 export default 与单行具名导出（const/let/var 多声明符、function/async function/class、`export { 别名列表 }`），named import 按导出名解析——导出存在性按 hasOwn 判定（值为 undefined 的合法导出仍可导入），且保留 ESM 动态绑定（导出 getter + 导入转发，源模块更新导出变量后导入方读到新值）；同一命令内按规范化路径缓存卷内模块（同文件多次导入共享同一实例，身份稳定）。`export default` 捕获与 `import.meta` 注入基于代码上下文掩码——字符串/模板/正则/注释内的关键字不误伤。插件/规则/选项形态与 schema 校验按真实引擎口径——带 options 的规则须声明 meta.schema。规则接口即 ESLint 规则 API：规则文件 `export default { meta, create(context) }`，report 的顶层 `line`/`column` 简写按 1 基约定自动转为引擎坐标，`node`/`loc` 形态与 meta 原样透传；文本类规则与 AST visitor 规则均可执行。
 
-CLI 支持 `--config`、`--format`（`stylish` 默认，仅列出有问题的文件并跨文件汇总 `✖ N problems`；`json` 为 results 数组，字段为真实 formatter 的子集，含无问题文件）、`--ext`（并入由 config 推导的候选扩展名——无 `files` 键的 item 隐式覆盖 js/mjs/cjs）、`--max-warnings` 与目标文件/目录，选项与目标可交错；目录递归遍历并跳过 `node_modules` 与点开头目录，显式文件不受扩展名限制；未匹配任何配置（含被全局 ignores 排除）的文件静默跳过。退出码为近似口径：0=干净、1=存在 error 或 warning 超过 `--max-warnings`、2=fatal（配置缺失或执行失败、引擎错误、目标不匹配等）。`--fix`、stdin lint、处理器未覆盖——触到即明确报错。典型装配如下：
+CLI 支持 `--config`、`--format`（`stylish` 默认，仅列出有问题的文件并跨文件汇总 `✖ N problems`；`json` 为 results 数组，字段为真实 formatter 的子集，含无问题文件）、`--ext`（并入由 config 推导的候选扩展名——无 `files` 键的 item 隐式覆盖 js/mjs/cjs，`files` 模式的尾部花括号组（如 `**/*.{js,mjs}`）按展开提取扩展名）、`--max-warnings` 与目标文件/目录，选项与目标可交错；目录递归遍历并跳过 `node_modules` 与点开头目录，显式文件不受扩展名限制；未匹配任何配置（含被全局 ignores 排除）的文件静默跳过——跳过判定在读取之前（被忽略文件零读取）。退出码为近似口径：0=干净、1=存在 error 或 warning 超过 `--max-warnings`、2=fatal（配置缺失或执行失败、引擎错误、目标不匹配等）。`--fix`、stdin lint、处理器未覆盖——触到即明确报错。典型装配如下：
+
+插件测试按代码所有权划分职责：可维护源码的自研插件应显式使用 lite 组件，并在内存环境中验证自身业务逻辑；引用的第三方 npm 插件只验证本项目的加载、配置和规则接线是否正确，不承担第三方内部实现的黑盒测试，也不要求把其内部原生 I/O 全部转换为 lite 调用。加载器已提供的 fs 注入属于兼容能力，不构成对第三方插件及其依赖链的通用隔离承诺。
 
 ```js
 import { t_install } from 'litenvi-node/lite-cmd-eslint.mjs';

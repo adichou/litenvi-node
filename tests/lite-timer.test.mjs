@@ -128,6 +128,56 @@ test('入参校验：mock 形状/纪元、advanceMs 数值与状态', async () =
   await assert.doesNotReject(() => liteTimer.t_advanceMs(0), '零推进应合法');
 });
 
+/** 场景：定时器派发语义与真实 Node 对照（node:timers 文档 setTimeout/setInterval/clear 系：
+ * https://nodejs.org/api/timers.html#settimeoutcallback-delay-args /
+ * https://nodejs.org/api/timers.html#setintervalcallback-delay-args /
+ * https://nodejs.org/api/timers.html#cleartimeouttimeout）——同延迟按插入序派发（FIFO）、
+ * 额外实参透传、interval 重复派发与 clear 幂等（clearInterval/clearTimeout 重复调用、对已
+ * 触发/未知句柄均为 no-op）。原生侧用 globalThis 定时器跑同一场景脚本，虚拟侧以 advanceMs
+ * 等效推进（冻结世界为头注释声明的口径差异，只比事件日志）。句柄形态（原生 Timeout 对象 vs
+ * 虚拟句柄对象）亦为声明偏差，仅断言可选消费安全。 */
+test('真实 Node 对照：同延迟 FIFO、setInterval 额外实参与 clear 幂等', async () => {
+  const scenario = (world) => {
+    const log = [];
+    world.setTimeout(() => log.push('zero-1'), 0);
+    world.setTimeout(() => log.push('zero-2'), 0);
+    world.setTimeout((a, b) => log.push(['timeout-args', a, b]), 30, 'x', 2);
+    const ghost = world.setTimeout(() => log.push('ghost'), 10);
+    world.clearTimeout(ghost); // 未到期即取消（文档：clearTimeout 阻止触发）
+    world.clearTimeout(ghost); // 重复 clear 幂等
+    world.clearTimeout(undefined); // 未知句柄 no-op
+    const ticks = [];
+    const interval = world.setInterval((tag) => ticks.push(tag), 20, 'tick');
+    world.setTimeout(() => { world.clearInterval(interval); world.clearInterval(interval); }, 45);
+    return { log, ticks };
+  };
+  const waitFor = async (world) => {
+    const { log, ticks } = scenario(world);
+    await world.settle(100);
+    return { log, ticks };
+  };
+  const nativeWorld = {
+    setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout,
+    setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval,
+    settle: ms => new Promise(resolve => globalThis.setTimeout(resolve, ms)),
+  };
+  const expected = await waitFor(nativeWorld);
+  liteTimer.t_unmock();
+  liteTimer.t_mock({ now: 0 });
+  try {
+    const virtualWorld = {
+      setTimeout, clearTimeout, setInterval, clearInterval,
+      settle: ms => liteTimer.t_advanceMs(ms),
+    };
+    // 预期：事件日志（派发序、实参、取消效果）与真实 Node 一致
+    assert.deepEqual(await waitFor(virtualWorld), expected, '定时器派发语义应与真实 Node 一致');
+    // 预期 2：虚拟句柄 valueOf 为时钟内部数值 id（声明偏差），unref 可选消费安全短路
+    const handle = setTimeout(() => {}, 10);
+    assert.match(String(handle), /^\d+$/, '虚拟句柄 valueOf 应为时钟内部数值 id');
+    assert.doesNotThrow(() => handle.unref?.(), 'unref 可选消费应安全短路');
+  } finally { liteTimer.t_unmock(); }
+});
+
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-timer.mjs 导入的
  * 遮蔽绑定与库内部相对导入必须是同一实例，否则虚拟时钟会静默分裂（exports 变动先红）。 */
 test('包自引用 specifier 与相对导入共享同一单例', async () => {

@@ -1582,6 +1582,161 @@ test('Git 写入失败：ENOSPC 通过命令结果报告，撤销后可恢复', 
   } finally { remove?.(); done(); }
 });
 
+/** 场景：log 占位符引擎与只读引用族与真实 Git 对照（git-scm 文档 git-log/pretty-formats、
+ * git-rev-parse/git-rev-list/git-show/git-ls-tree/git-diff/git-check-ignore：
+ * https://git-scm.com/docs/git-log / https://git-scm.com/docs/pretty-formats /
+ * https://git-scm.com/docs/git-rev-parse / https://git-scm.com/docs/git-rev-list /
+ * https://git-scm.com/docs/git-show / https://git-scm.com/docs/git-ls-tree /
+ * https://git-scm.com/docs/git-diff / https://git-scm.com/docs/git-check-ignore /
+ * https://git-scm.com/docs/git-fetch）——log 的 %H/%h/%P/%an/%ae/%aI/%s/%B、--skip、a..b
+ * 范围与 --not 排除；rev-parse 选项族；rev-list 计数/拓扑序/根提交；show 的 -s --format 与
+ * rev:path；ls-files/ls-tree/diff-tree 清单；diff --quiet/--cached --quiet 退出码；
+ * check-ignore 判定与 fetch 失败块。提交时间与提交号两侧各自生成，按占位符归一（%at 在
+ * 头注释声明的占位符集之外，不纳入对照）。 */
+test('真实 Git 对照：log 格式引擎、只读引用族与忽略模型', () => {
+  const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'lite-git-readonly-'));
+  const realRoot = nativeFs.realpathSync(temporary);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+  Object.assign(env, { LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' });
+  const config = ['-c', 'user.name=Coverage', '-c', 'user.email=coverage@example.invalid', '-c', 'commit.gpgSign=false',
+    '-c', 'core.hooksPath=/dev/null', '-c', 'advice.detachedHead=false'];
+  const scenario = (root, fileSystem) => {
+    const responses = [];
+    const normalize = text => String(text).replaceAll(root, '<root>')
+      .replace(/\b[0-9a-f]{7,40}\b/g, '<sha>')
+      .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d{2}:\d{2}|Z)/g, '<date>');
+    const run = (args, fields = ['status', 'stdout', 'stderr']) => {
+      const result = liteChildProcess.spawnSync('git', [...config, ...args], { cwd: root, env, encoding: 'utf8' });
+      responses.push({ command: args.join(' '), ...Object.fromEntries(fields.map(field =>
+        [field, typeof result[field] === 'string' ? normalize(result[field]) : result[field]])) });
+      return result;
+    };
+    const put = (rel, text) => fileSystem.writeFileSync(path.join(root, rel), text);
+    // 输入：根 .gitignore 忽略 ignore-me.txt，两次提交形成可查询历史
+    run(['init', '-q', '-b', 'main']);
+    put('.gitignore', 'ignore-me.txt\n');
+    put('base.txt', 'one\n');
+    put('ignore-me.txt', 'hidden\n');
+    run(['add', '.gitignore', 'base.txt']);
+    run(['commit', '-q', '-m', 'base']);
+    run(['status', '--porcelain', '--untracked-files=all']);
+    put('base.txt', 'two\n');
+    put('extra.txt', 'extra\n');
+    run(['add', 'base.txt', 'extra.txt']);
+    run(['commit', '-q', '-m', 'change']);
+    // 输入：rev-parse 选项族与符号引用
+    run(['rev-parse', '--is-inside-work-tree']);
+    run(['rev-parse', '--show-toplevel']);
+    run(['rev-parse', '--abbrev-ref', 'HEAD']);
+    run(['rev-parse', '--verify', 'HEAD']);
+    run(['rev-parse', '--verify', '--quiet', 'no-such-ref']);
+    run(['rev-parse', '--verify', 'no-such-ref']);
+    run(['symbolic-ref', '--short', 'HEAD']);
+    // 输入：log 占位符、分页、范围与排除
+    run(['log', '--format=%H|%P|%an|%ae|%aI|%cn|%ce|%cI|%s']);
+    run(['log', '-n', '1', '--format=%h %s']);
+    run(['log', '--skip=1', '--format=%s']);
+    run(['log', '--format=%s', 'HEAD~1..HEAD']);
+    run(['log', '--format=%s', '--not', 'HEAD~1']);
+    run(['log', '-1', '--format=%B']);
+    // 输入：rev-list 计数、顺序与根提交
+    run(['rev-list', 'HEAD']);
+    run(['rev-list', '--count', 'HEAD']);
+    run(['rev-list', '--topo-order', '--reverse', 'HEAD']);
+    run(['rev-list', '--max-parents=0', 'HEAD']);
+    // 输入：show 的摘要格式与树内文件内容、缺失路径
+    run(['show', '-s', '--format=%s', 'HEAD']);
+    run(['show', 'HEAD:base.txt']);
+    run(['show', 'HEAD:absent.txt']);
+    // 输入：索引清单、树清单与提交差异路径
+    run(['ls-files']);
+    run(['ls-files', '--error-unmatch', 'base.txt']);
+    run(['ls-files', '--error-unmatch', 'absent.txt']);
+    run(['ls-tree', '--name-only', '-r', 'HEAD']);
+    run(['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD']);
+    // 输入：diff 退出码——干净 0、工作树脏 1、暂存后 --cached 1、提交后归 0
+    run(['diff', '--quiet']);
+    put('base.txt', 'dirty\n');
+    run(['diff', '--quiet']);
+    run(['diff', '--cached', '--quiet']);
+    run(['add', 'base.txt']);
+    run(['diff', '--cached', '--quiet']);
+    run(['commit', '-q', '-m', 'dirty']);
+    run(['diff', '--quiet']);
+    // 输入：check-ignore 判定与传输命令失败块（pull 的无远端口径为头注释声明的 128 偏差，
+    // 原生无上游时报 1 + tracking 提示，不纳入对照）
+    run(['check-ignore', '-q', 'ignore-me.txt']);
+    run(['check-ignore', '-q', 'base.txt']);
+    run(['fetch', '--all']);
+    run(['fetch', 'origin']);
+    return responses;
+  };
+  try {
+    const expected = scenario(realRoot, nativeFs);
+    const done = setup();
+    try {
+      liteFs.mkdirSync('/mock/git-readonly', { recursive: true });
+      // 预期：占位符展开、引用解析、清单、退出码与忽略判定均与真实 Git 一致
+      assert.deepEqual(scenario('/mock/git-readonly', liteFs), expected, '只读引用族应与真实 Git 一致');
+    } finally { done(); }
+  } finally { nativeFs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
+/** 场景：合并冲突的回包口径与真实 Git 对照（git-scm 文档 git-merge：
+ * https://git-scm.com/docs/git-merge）——分叉合并 status 1、
+ * stdout 的 Auto-merging/CONFLICT (content)/Automatic merge failed 提示；解决冲突后提交成功、
+ * 工作树恢复干净。冲突状态模型（解决前二次合并的 128、合并提交的双父历史、文件冲突标记与
+ * porcelain UU）为头注释声明范围之外，不纳入对照。 */
+test('真实 Git 对照：合并冲突回包与解决后恢复', () => {
+  const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'lite-git-conflict-'));
+  const realRoot = nativeFs.realpathSync(temporary);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+  Object.assign(env, { LC_ALL: 'C', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' });
+  const config = ['-c', 'user.name=Coverage', '-c', 'user.email=coverage@example.invalid', '-c', 'commit.gpgSign=false',
+    '-c', 'core.hooksPath=/dev/null', '-c', 'advice.detachedHead=false'];
+  const scenario = (root, fileSystem) => {
+    const responses = [];
+    const normalize = text => String(text).replaceAll(root, '<root>').replace(/\b[0-9a-f]{7,40}\b/g, '<sha>');
+    const run = (args, fields = ['status', 'stdout', 'stderr']) => {
+      const result = liteChildProcess.spawnSync('git', [...config, ...args], { cwd: root, env, encoding: 'utf8' });
+      responses.push({ command: args.join(' '), ...Object.fromEntries(fields.map(field =>
+        [field, typeof result[field] === 'string' ? normalize(result[field]) : result[field]])) });
+      return result;
+    };
+    const put = (rel, text) => fileSystem.writeFileSync(path.join(root, rel), text);
+    // 输入：两个分支对同一文件的分叉修改，main 合并 dev 触发内容冲突
+    run(['init', '-q', '-b', 'main']);
+    put('shared.txt', 'base\n');
+    run(['add', 'shared.txt']);
+    run(['commit', '-q', '-m', 'base']);
+    run(['switch', '-c', 'dev']);
+    put('shared.txt', 'dev\n');
+    run(['add', 'shared.txt']);
+    run(['commit', '-q', '-m', 'dev-change']);
+    run(['switch', 'main']);
+    put('shared.txt', 'main\n');
+    run(['add', 'shared.txt']);
+    run(['commit', '-q', '-m', 'main-change']);
+    run(['merge', 'dev']);
+    // 输入：解决冲突后完成提交，工作树恢复干净
+    put('shared.txt', 'resolved\n');
+    run(['add', 'shared.txt']);
+    run(['commit', '-m', 'resolved'], ['status']);
+    run(['status', '--porcelain']);
+    run(['diff', '--quiet']);
+    return responses;
+  };
+  try {
+    const expected = scenario(realRoot, nativeFs);
+    const done = setup();
+    try {
+      liteFs.mkdirSync('/mock/git-conflict', { recursive: true });
+      // 预期：冲突回包（status/stdout/stderr）与解决后干净状态与真实 Git 一致
+      assert.deepEqual(scenario('/mock/git-conflict', liteFs), expected, '合并冲突回包应与真实 Git 一致');
+    } finally { done(); }
+  } finally { nativeFs.rmSync(temporary, { recursive: true, force: true }); }
+});
+
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-cmd-git.mjs 导入的
  * 安装入口与库内部相对导入必须是同一实例（exports 变动先红）。 */
 test('包自引用 specifier 与相对导入共享同一单例', async () => {

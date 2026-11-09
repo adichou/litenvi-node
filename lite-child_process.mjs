@@ -1,8 +1,10 @@
 // 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；t_ 表示仅测试代码可引用或调用；无前缀的接口允许所有调用方使用。
 // lite-child_process：node:child_process 的 spawn、exec、execFile 及同步版本切换门面。
 // 默认转发真实 Node；mock 后经 mgr 解析并执行内存命令，全部调用统一记入 calls()，reset()
-// 只清账本。spawn 通过流与异步事件报告结果，启动失败发 error/close；spawnSync 按 encoding
-// 返回 Buffer 或字符串，并提供 status/signal/output/pid。自然退出与信号退出均移除 PID。
+// 只清账本。spawn 通过流与异步事件报告结果，启动失败发 error/close；spawn 支持 options.timeout
+// 到期按 killSignal（缺省 SIGTERM）终止——exit/close 带信号、无 error 事件（对齐原生）；
+// spawnSync 按 encoding 返回 Buffer 或字符串，并提供 status/signal/output/pid。自然退出与
+// 信号退出均移除 PID。
 // 命令实现通过 lite-process 的 pkg_commandContext 获取进程能力；不在命令模块维护子进程账本。
 import {
     spawn as realSpawn, spawnSync as realSpawnSync, exec as realExec, execSync as realExecSync,
@@ -599,6 +601,13 @@ function f_createMemorySpawn() {
         // 虚拟子进程持有独立引用；unref 释放它，退出或卸载世界时统一清理。
         state.lifetime = f_setInterval(() => {}, 0x7fffffff);
         children.set(child.pid, child);
+        // options.timeout：到期以 killSignal（缺省 SIGTERM）终止（对齐原生 spawn 口径：
+        // exit/close 带信号、无 error 事件；提前退出时撤销定时器）。
+        let exitTimer = null;
+        if (options.timeout) {
+            exitTimer = f_setTimeout(() => child.kill(options.killSignal || 'SIGTERM'), options.timeout);
+            child.once('exit', () => { if (exitTimer) { f_clearTimeout(exitTimer); exitTimer = null; } });
+        }
         // 命令只写子进程管道；stdio 为 ignore 时由内部空流吸收，公开字段仍为 null。
         const discard = new PassThrough();
         discard.resume();

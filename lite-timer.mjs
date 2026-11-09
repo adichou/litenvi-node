@@ -8,8 +8,9 @@
 // 虚拟时钟为手动推进（冻结）语义：t_mock({ now? }) 从给定纪元（缺省当前真实时刻）起步，
 // 定时器只在 t_advanceMs(ms) 推进时到期触发（tickAsync 口径：派发到期回调并让其微任务沉淀，
 // 回调内新建的定时器等待后续推进）；Date.now() / new Date() / Date() 返回虚拟当前时刻，
-// new Date(x) 与 parse/UTC 等静态面原样透传。句柄为时钟内部 id（数值），被注入模块的
-// `handle.unref?.()` 等可选消费安全短路，不持真实事件循环句柄。
+// new Date(x) 与 parse/UTC 等静态面原样透传。句柄为时钟内部 id 的句柄对象（valueOf 为数值
+// id，ref/unref/refresh 安全可用），被注入模块的 `handle.unref?.()` 等可选消费安全短路，
+// 不持真实事件循环句柄。
 // 与 @sinonjs/fake-timers 的关系：复用其 createClock 独立时钟（与 VM 链 environment.mjs
 // 同源），不使用 install——不触碰宿主全局，lite 链单进程内共存成为可能。
 // 与 lite-browser-timer 的分工：那是页面端 AbortSignal.timeout 的 gate 门面（页面 bundle

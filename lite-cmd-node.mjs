@@ -1,8 +1,9 @@
 // 方法隔离：f_ 表示文件私有；pkg_ 表示仅包内协作；t_ 表示仅测试代码可引用或调用；无前缀的接口允许所有调用方使用。
 // lite-cmd-node：Node/npm 命令定义，执行入口统一经 lite-child_process。
 // 脚本经普通 import 在宿主内执行，不启动真实子进程，也不使用 VM 模块加载器。
-// AsyncLocalStorage 将 process、console、定时器及文件/服务调用路由到当前虚拟命令；
-// spawn 输入运行期暂存为 fd 0（lite-fs 管道型记录），脚本内 fs.readFileSync(0) 同步可读。
+// AsyncLocalStorage 将 process、console、定时器及服务调用路由到当前虚拟命令；
+// 不包装原生 fs：自研脚本显式使用 lite-fs 访问内存卷，原生 fs 的方法与 ESM 导出保持不变。
+// spawn 输入运行期暂存为 fd 0（lite-fs 管道型记录），脚本内 liteFs.readFileSync(0) 同步可读。
 // 入口 URL 带运行序号以重新执行入口，依赖保持原生 import 缓存与共享全局语义。
 import path from 'node:path';
 import realFs from 'node:fs';
@@ -17,7 +18,7 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import tls from 'node:tls';
-import liteFs, { pkg_stageStdin, pkg_releaseStdin } from './lite-fs.mjs';
+import { pkg_stageStdin, pkg_releaseStdin } from './lite-fs.mjs';
 import liteServer from './lite-server.mjs';
 import liteChildProcess from './lite-child_process.mjs';
 import { pkg_ProcessExitError } from './lite-cmd-mgr.mjs';
@@ -97,19 +98,6 @@ function f_installBoundaries() {
         f_replace(globalThis, key, { writable: true, value: f_dispatch });
         f_replace(timers, key, { writable: true, value: f_dispatch });
     }
-    // 同步文件调用经 liteFs；同步重入时允许门面把排除路径转给真实 fs。
-    let insideFs = false;
-    for (const key of Object.keys(realFs).filter(key => key.endsWith('Sync') && typeof realFs[key] === 'function')) {
-        const original = realFs[key];
-        // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-        f_replace(realFs, key, { writable: true, value: function (...args) {
-            const runtime = f_currentRuntime();
-            if (!runtime || insideFs) return original.apply(this, args);
-            insideFs = true;
-            try { return liteFs[key](...args); }
-            finally { insideFs = false; }
-        } });
-    }
     for (const owner of [http, https, net, tls, liteServer]) {
         const original = owner.createServer;
         // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
@@ -169,7 +157,7 @@ function f_runNode(plan, ctx, child) {
     const cwd = ctx.cwd();
     const inheritedExitCode = f_hostProcess.exitCode;
     const runtime = { finished: false };
-    // spawn 输入暂存为 fd 0：脚本内 fs.readFileSync(0) 同步读到 options.input 快照
+    // spawn 输入暂存为 fd 0：脚本内 liteFs.readFileSync(0) 同步读到 options.input 快照
     //（异步 spawn 经 ctx.options.input、同步命令经 ctx.input；流式 stdin 语义仍由
     // child.stdin 承担，暂存不消费流）。
     pkg_stageStdin(ctx.input ?? ctx.options?.input);

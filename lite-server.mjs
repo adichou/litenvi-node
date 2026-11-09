@@ -132,7 +132,10 @@ function f_createMemoryServer() {
                     serverReq.emit('end');
                 });
             });
-            const handled = server.handler(serverReq, serverRes);
+            // handler 同步抛错与异步拒绝同口径：统一转为拒绝，走下方 500 JSON 兜底（对齐头注释口径）
+            let handled;
+            try { handled = server.handler(serverReq, serverRes); }
+            catch (error) { handled = Promise.reject(error); }
             Promise.resolve(handled)
                     .catch(error => {
                         if (!finished) {
@@ -289,7 +292,8 @@ function f_createMemoryServer() {
                         const fault = faultIndex < 0 ? null : faults[faultIndex];
                         if (fault?.once) faults.splice(faultIndex, 1);
                         httpServer.closeIdleConnections?.();
-                        httpServer.close(() => {
+                        httpServer.close(closeError => {
+                            if (closeError) { this.emit('close', closeError); return; } // 未运行等原生错误：按回调错误口径转发（对齐原生 close）
                             if (fault) fault.wait.then(() => this.emit('close'), () => this.emit('close'));
                             else this.emit('close');
                         });

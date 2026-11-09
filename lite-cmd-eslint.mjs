@@ -26,7 +26,12 @@
 // 关键字不误伤。
 // 卷内模块支持 export default 与单行具名导出（const/let/var 多声明符、function/async
 // function/class、export { 别名列表 }），named import 按导出名解析（使用方共享
-// lint-rules/lib 模块形态）；多行导出列表未支持。
+// lint-rules/lib 模块形态）；多行导出列表未支持。具名导入保留 ESM 动态绑定：导出经 getter
+// 闭包捕获模块作用域声明、导入侧转发 getter 并以 with (__imports) 注入正文（按访问时求值），
+// 源模块更新导出变量后导入方读到新值；导出存在性按 Object.hasOwn 判定（值为 undefined 的
+// 合法导出仍可导入，真正缺失的导出才报错）。with 注入的近似边界（如实声明）：模块顶部
+// 'use strict' 指令被剥离（ESM 本就强制 strict，行为不变）；对导入绑定赋值不产生 ESM 的
+// TypeError（sloppy 下静默失败）；正文声明与导入同名按 sloppy 遮蔽（ESM 中属非法重复绑定）。
 // flat config 的 default export 须为数组；字符串插件值视为内存卷路径（须导出插件对象，同一
 // 路径多次引用保持同一身份）；其余 item 键（files/ignores/languageOptions/name/settings…）
 // 全部透传真实引擎——插件/规则/选项的形态与 schema 校验（含「带 options 的规则须声明
@@ -36,8 +41,10 @@
 // 原样透传；文本类规则（create 内同步 report）与 AST visitor 规则均可执行。
 // CLI 支持 --config、--format stylish|json、--ext、--max-warnings 与目标文件/目录，选项与目标
 // 可交错；候选扩展名由 config 推导（无 files 键的 item 贡献 js/mjs/cjs，files 模式提取尾部
-// 扩展名）并入 --ext；目录递归遍历并跳过 node_modules 与点开头目录，显式文件不受扩展名限制；
-// 未匹配任何配置（含被全局 ignores 排除）的文件静默跳过。输出与退出码为近似口径：stylish 为
+// 扩展名——含尾部花括号组的展开，如 **/*.{js,mjs} 同时贡献 js 与 mjs）并入 --ext；目录递归
+// 遍历并跳过 node_modules 与点开头目录，显式文件不受扩展名限制；未匹配任何配置（含被全局
+// ignores 排除）的文件静默跳过——跳过判定在读取之前（先以空文本探测 config 匹配，被忽略
+// 文件零读取）。输出与退出码为近似口径：stylish 为
 // 简化对齐排版，json 字段为真实 formatter 的子集，0=干净、1=存在 error 或 warning 超过
 // --max-warnings、2=fatal（配置缺失或执行失败、引擎错误、目标不匹配等）；错误统计为真实值
 //（fatal 消息与 fixable 计数来自引擎）。未覆盖面：--fix、stdin lint、处理器——触到即明确报错。
@@ -328,7 +335,15 @@ function f_resolveImport(spec, fromPath, depth, loading) {
     if (/^(?:\.\/|\.\.\/|\/)/.test(spec)) {
         const target = path.isAbsolute(spec) ? spec : path.resolve(path.dirname(fromPath), spec);
         const mod = f_executeModule(target, depth + 1, loading);
-        return { builtin: false, value: { default: mod.default, ...mod.named } };
+        // 转发对象：不 spread 拷贝（值快照会断开动态绑定），按属性描述符转发 getter——
+        // default 与具名导出都在访问时回到被导入模块求值
+        const forwarded = {};
+        Object.defineProperty(forwarded, 'default', { get: () => mod.default, enumerable: true });
+        for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(mod.named))) {
+            Object.defineProperty(forwarded, name,
+                descriptor.get ? { get: descriptor.get, enumerable: true } : { get: () => mod.named[name], enumerable: true });
+        }
+        return { builtin: false, value: forwarded };
     }
     return { builtin: true, value: f_resolveNpmPackage(spec, fromPath) };
 }
@@ -355,7 +370,12 @@ function f_executeModule(volumePath, depth = 0, loading = new Set()) {
         throw new Error(`无法读取模块 ${resolvedPath}：${error.message}`);
     }
     const lines = source.split('\n');
-    const bindings = new Map(); // 注入参数名 → 绑定值
+    // 导入命名空间：绑定名 → 惰性 getter（按访问时求值）。正文包 with (__imports) 执行——
+    // 具名导入转发被导入模块导出变量的 getter，保留 ESM 动态绑定语义（导入后源模块更新，
+    // 导入方读到新值）；default/namespace 同为惰性属性（builtin 值静态、卷内模块转发 getter）。
+    const imports = {};
+    // 私有方法：仅在本文件实现中使用，不导出。
+    const f_defineImport = (local, get) => { Object.defineProperty(imports, local, { get, enumerable: true }); };
     let i = 0;
     // 顶部 import：跳过空行与注释行；import 之后的首个非 import 行开始正文（仅支持顶部 import）
     for (; i < lines.length; i++) {
@@ -368,9 +388,9 @@ function f_executeModule(volumePath, depth = 0, loading = new Set()) {
         const spec = m[pattern.specGroup];
         const { builtin, value } = f_resolveImport(spec, resolvedPath, depth, loading);
         if (pattern.defaultGroup >= 0) {
-            bindings.set(m[pattern.defaultGroup], builtin ? (f_isEsmNamespace(value) ? value.default : value) : value.default);
+            f_defineImport(m[pattern.defaultGroup], () => builtin ? (f_isEsmNamespace(value) ? value.default : value) : value.default);
         }
-        if (pattern.nsGroup >= 0) bindings.set(m[pattern.nsGroup], value);
+        if (pattern.nsGroup >= 0) f_defineImport(m[pattern.nsGroup], () => value);
         if (pattern.namedGroup >= 0) {
             for (const entry of m[pattern.namedGroup].split(',')) {
                 const item = entry.trim();
@@ -378,14 +398,20 @@ function f_executeModule(volumePath, depth = 0, loading = new Set()) {
                 const pair = /^(\w+)(?:\s+as\s+(\w+))?$/.exec(item);
                 if (!pair) throw new Error(`无法解析 named import 绑定 '${item}'：${resolvedPath}:${i + 1}`);
                 const name = pair[1];
-                if (value[name] === undefined) {
+                // 存在性与值分开判定：值为 undefined 的合法导出仍可导入（hasOwn 不触发 getter、
+                // 不受原型链污染）；真正缺失的导出才报错
+                if (!Object.hasOwn(value, name)) {
                     throw new Error(`'${spec}' 未导出 ${name}：${resolvedPath}:${i + 1}`);
                 }
-                bindings.set(pair[2] ?? name, value[name]);
+                f_defineImport(pair[2] ?? name, () => value[name]);
             }
         }
         lines[i] = ''; // import 语句已消费，从正文移除
     }
+    // 顶部 'use strict' 指令剥离：ESM 语义本就强制 strict（剥离不改行为），正文以 sloppy 形态
+    // 包入 with (__imports)（with 需非严格模式；行中指令位置之后的 'use strict' 只是普通
+    // 表达式语句，无指令效果，无需处理）
+    if (i < lines.length && /^\s*(['"])use strict\1\s*;?\s*$/.test(lines[i])) lines[i] = '';
     // 顶部导出收集：export default 之外，支持单行具名导出（const/let/var/function/async
     // function/class 与 export { 别名列表 }）；解构导出、多行导出列表、from 再导出明确报错
     const namedExports = new Map(); // 导出名 → 源标识符
@@ -441,12 +467,14 @@ function f_executeModule(volumePath, depth = 0, loading = new Set()) {
     code = f_replaceCode(code, mask, /import\.meta\.dirname/g, '__importMetaDirname');
     mask = f_codeMask(code);
     if (f_firstCodeMatch(code, mask, /\bimport\.meta\b/g)) throw new Error(`import.meta 仅支持 url / dirname 成员：${resolvedPath}`);
-    const namedPairs = [...namedExports].map(([alias, source]) => `${alias}: ${source}`).join(', ');
+    // 具名导出为 getter：闭包捕获模块作用域声明（const/let/var/function/class 全覆盖），
+    // 导入方经转发链读到当前值——导出变量的动态绑定
+    const namedPairs = [...namedExports].map(([alias, source]) => `get ${alias}() { return ${source}; }`).join(', ');
     let fn;
     try {
-        fn = new Function('__importMetaUrl', '__importMetaDirname', ...bindings.keys(),
-            `${code}\n;return { __exportDefault: typeof __exportDefault !== 'undefined' ? __exportDefault : undefined, __namedExports: { ${namedPairs} } };`);
-        const result = fn(`file://${resolvedPath}`, path.dirname(resolvedPath), ...bindings.values());
+        fn = new Function('__importMetaUrl', '__importMetaDirname', '__imports',
+            `with (__imports) {\n${code}\n;return { __exportDefault: typeof __exportDefault !== 'undefined' ? __exportDefault : undefined, __namedExports: { ${namedPairs} } };\n}`);
+        const result = fn(`file://${resolvedPath}`, path.dirname(resolvedPath), imports);
         const module = { default: result.__exportDefault, named: result.__namedExports };
         f_moduleCache.set(resolvedPath, module);
         return module;
@@ -535,6 +563,19 @@ function f_normalizeConfig(configPath) {
 // 候选扩展名推导：无 files 键的 item 贡献默认 js/mjs/cjs；files 模式提取尾部扩展名
 //（'**/*.test.mjs' → mjs、'package.json' → json，无扩展名模式不贡献）。
 // 私有方法：仅在本文件实现中使用，不导出。
+// 花括号展开（仅一层、仅字面量项）：`**/*.{js,mjs}` → 两条模式。引擎 minimatch 自身支持
+// 花括号；此展开只为目录递归前的扩展名推导服务。
+// 私有方法：仅在本文件实现中使用，不导出。
+function f_expandBraces(pattern) {
+    const m = /\{([^{}]+)\}([^{]*)$/.exec(pattern);
+    if (!m) return [pattern];
+    const [, body, tail] = m;
+    const items = body.split(',').map((item) => item.trim()).filter(Boolean);
+    if (items.length < 2) return [pattern];
+    return items.flatMap((item) => f_expandBraces(pattern.slice(0, m.index) + item + tail));
+}
+
+// 私有方法：仅在本文件实现中使用，不导出。
 function f_configExts(config) {
     const exts = new Set();
     for (const item of config) {
@@ -547,8 +588,10 @@ function f_configExts(config) {
         }
         const patterns = Array.isArray(item.files) ? item.files : [item.files];
         for (const pattern of patterns) {
-            const m = /\.([A-Za-z][\w]*)$/.exec(String(pattern).replace(/\/+$/, ''));
-            if (m) exts.add(m[1]);
+            for (const expanded of f_expandBraces(String(pattern).replace(/\/+$/, ''))) {
+                const m = /\.([A-Za-z][\w]*)$/.exec(expanded);
+                if (m) exts.add(m[1]);
+            }
         }
     }
     return [...exts];
@@ -602,11 +645,17 @@ function f_collectTargets(targets, cwd, exts) {
 
 // ---------- 检查执行 ----------
 
-// 单文件检查：从内存卷读文本交给真实引擎；「未匹配配置/被全局 ignores 排除」的文件（verify
-// 只回 no-config warning）静默跳过返回 null，近似真实 CLI 默认行为；其余消息按 (line, column)
-// 排序并归一为本模块的字段子集。
+// 单文件检查：先以空文本探测 config 匹配（未匹配/被全局 ignores 排除的文件在读取之前即
+// 静默跳过返回 null——被忽略文件零 readFileSync，对齐真实 CLI「应用忽略规则后才读文件」的
+// 顺序）；匹配的文件再从内存卷读真文本交给真实引擎；其余消息按 (line, column) 排序并归一
+// 为本模块的字段子集。
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_lintFile(linter, configs, file) {
+    // 私有方法：config 未匹配的判据——verify 只回 no-config warning（丢弃空文本可能产生的
+    // 诊断，仅用于路径匹配判定）。
+    const f_unmatched = (messages) => messages.length > 0
+        && messages.every((message) => message.ruleId === null && /No matching configuration/.test(String(message.message || '')));
+    if (f_unmatched(linter.verify('', configs, { filename: file }))) return null;
     let text;
     try {
         text = fs.readFileSync(file, 'utf8');
@@ -614,7 +663,7 @@ function f_lintFile(linter, configs, file) {
         throw new Error(`无法读取被检文件 ${file}：${error.message}`);
     }
     const raw = linter.verify(text, configs, { filename: file });
-    if (raw.length > 0 && raw.every((message) => message.ruleId === null && /No matching configuration/.test(String(message.message || '')))) {
+    if (f_unmatched(raw)) {
         return null;
     }
     return raw
