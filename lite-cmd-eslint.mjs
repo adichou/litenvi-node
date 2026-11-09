@@ -60,7 +60,7 @@ function f_findFlatConfig(cwd) {
 
 // 私有：只加载真实透传域中的配置或兼容插件模块，内存源码不能伪装成真实文件。
 async function f_importModule(file) {
-    if (!fs.isPassthrough(file)) throw new Error(`ESLint 配置/规则须位于 exclude 真实源码目录：${file}`);
+    if (!fs.pkg_isPassthrough(file)) throw new Error(`ESLint 配置/规则须位于 exclude 真实源码目录：${file}`);
     const url = pathToFileURL(file);
     url.searchParams.set('mtime', String(fs.statSync(file).mtimeMs));
     return import(url.href);

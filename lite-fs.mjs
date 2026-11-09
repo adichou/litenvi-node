@@ -612,10 +612,10 @@ const f_scoped = (target) => {
 
 // 作用域自省：路径当前是否落在真实磁盘透传域——未 mock 时全量真实；mock 后仅排除目录
 //（声明为系统本体的目录）及其子路径透传，其余走内存卷。供其他 lite 门面按同一作用域口径
-// 判定路径归属（如 lite-cmd-eslint 仅为透传域模块追加 sourceURL 源码归属——卷内文本即使
-// 与真实磁盘同名文件并存，执行的也是卷内容，不得归属到真实文件）。
-// 外部方法：查询作用域，允许所有调用方使用；生产代码可用于只读判定，不得借此绕过卷写边界。
-const isPassthrough = (target) => {
+// 判定路径归属（如 lite-cmd-eslint 在原生 import 前确认配置属于真实透传域，避免发现内存
+// 文件后却加载磁盘上的同名模块）。仅查询作用域，不检查文件存在性，也不改变文件访问方式。
+// 包内协作方法：仅同包门面使用，不得借此绕过卷写边界。
+const pkg_isPassthrough = (target) => {
     if (!f_memory)
         return true;
     return !f_scoped(target);
@@ -628,8 +628,8 @@ const facade = new Proxy({}, {
             return Reflect.get(fs, prop);
         if (prop === 't_mock')
             return t_mock;
-        if (prop === 'isPassthrough')
-            return isPassthrough;
+        if (prop === 'pkg_isPassthrough')
+            return pkg_isPassthrough;
         if (prop === 't_unmock')
             return t_unmock;
         if (prop === 't_inject')

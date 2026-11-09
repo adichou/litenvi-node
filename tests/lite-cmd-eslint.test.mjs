@@ -54,7 +54,7 @@ function f_prepareConfig(argv, cwd) {
       current = path.dirname(current);
     }
   }
-  if (!config || liteFs.isPassthrough(config) || !f_moduleSources.has(config)) return args;
+  if (!config || liteFs.pkg_isPassthrough(config) || !f_moduleSources.has(config)) return args;
   const runRoot = nativeFs.mkdtempSync(path.join(f_sourceRoot, 'run-'));
   for (const [file, text] of f_moduleSources) {
     const destination = path.join(runRoot, file.slice(path.parse(file).root.length));
