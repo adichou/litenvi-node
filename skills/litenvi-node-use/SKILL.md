@@ -58,7 +58,7 @@ try {
 
 - node/os 系统命令导入即登记（node/npm、open/ls/pwd/cwd/kill、mkdir/rm/cp/mv/cat/touch/test、cd/exit 内建）。
 - **Git 须显式安装**：`import { t_install } from 'litenvi-node/lite-cmd-git.mjs'; t_install();`——仅导入不会登记，执行返回 `ENOENT`。`t_install()` 在内存卷建立前后调用皆可，幂等。
-- **ESLint 同样须显式安装**：`import { t_install } from 'litenvi-node/lite-cmd-eslint.mjs'; t_install();`——时序与幂等语义同 Git。前置：使用方项目须已安装 eslint（npm 解析基按序为宿主入口脚本 → 宿主 cwd → 本库自身，插件与引擎都从使用方侧解析）。规则经 flat config 的 plugins 外置（`{ rules }` 对象或卷内路径字符串），规则文件 `export default { meta, create(context) }` 即 ESLint 规则 API——文本类（report 顶层 line/column，1 基）与 AST visitor 类均可执行；卷内模块支持具名导出与 named import；带 options 的规则须声明 meta.schema；配置/规则模块 import 的 `node:fs`/`fs` 经 lite-fs 门面（mock 后读内存卷）；`eslint.config.mjs` 从执行 cwd 向上查找（或 `--config` 指定）；核心规则裸名直接可用；无子命令、无 checkpoint。
+- **ESLint 显式安装与异步加载**：调用 `t_install()` 后经 `spawn`／`execFile` 执行。`eslint.config.mjs` 与规则位于 exclude 真实源码目录，Node 原生 await import；受检文件留在内存卷。配置/自研规则需要内存数据时显式使用 lite-fs，原生 fs 不被自动替换。`spawnSync` 明确失败；真实 ESM 支持顶层 await、多行 import 和再导出，覆盖率直接归属原文件。
 - 配置入口 `mgr.command(nameOrPath)`：`t_onRun(handler)` 配置行为钩子（`(call, runBuiltin) => result`，`null` 移除）；`t_inject(fault)` 注入故障 `{ exit?, stderr?, wait?, once?, subcommand? }`，git 可按 `subcommand` 匹配（如 `{ subcommand: 'add', exit: 128, stderr: 'index.lock', once: true }`）。
 - 用户级临时命令：`mgr.t_defineUserCommand(name, impl)`（impl 含 `pkg_run/pkg_runSync`），落 `/mock/bin` 可遮蔽系统命令，须先 mock lite-fs，卷复位即清。
 

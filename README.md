@@ -27,6 +27,10 @@
 
 `lite-cmd-node` 在进程内执行完整脚本，提供命令参数、输入输出、退出、信号和资源生命周期；不再自动包装原生 `node:fs` 方法或改写其 ESM 具名导出。自研脚本须显式导入 `litenvi-node/lite-fs.mjs` 访问内存卷；`spawn` 的 `input` 仍可通过 `liteFs.readFileSync(0, 'utf8')` 同步读取。原生 `fs` 调用保持原生行为，第三方业务能力通过消费项目自己的代理控制，不能依赖虚拟 Node 自动隔离任意文件访问。
 
+`lite-cmd-node` 的入口检查通过 lite-fs，真实入口及其代码资源须由调用方在 `exclude` 中明确登记。`node --test <文件…>` 的 Worker 启动逻辑内置于 `lite-cmd-node.mjs` 的私有方法，无独立入口文件；在独立 Worker 中调用原生 `node:test`（`isolation: 'none'`），支持 `--test-name-pattern <表达式>`／`--test-name-pattern=<表达式>`、`--experimental-test-coverage`、覆盖率范围旗标 `--test-coverage-include`／`--test-coverage-exclude`（空格与等号取值均可、可重复，经 `run()` 的 `coverageIncludeGlobs`／`coverageExcludeGlobs` 透传，语义与原生命令一致——显式 include 会覆盖 node_modules 默认排除）及 `--` 后的字面文件路径。输出为真实 TAP 与实际 V8 覆盖率，失败退出 1，每次运行独立模块缓存，不启动 OS 子进程；终止或取消同步回收 Worker。测试 Worker 的 lite 模块单例与父世界独立，测试文件需自行装配自己的数据环境。测试文件只存在于内存卷时不能由原生模块加载器执行；没有显式文件或未知测试选项明确失败，不回放结果、不静默退回普通 import。
+
+模拟 `npm -v`／`npm --version` 固定返回 `10.9.0`，`npm --versions`／`npm --versions --json` 返回 2026-11-09 本机采集并固化的工具链信息（Node `22.12.0`、V8 `12.4.254.21-node.21` 等；仅工具链字段，不包含按当前目录变化的项目版本）。不扫描宿主 PATH、不读取本机 npm 安装信息；其他 npm 子命令仍明确未实现。未开启 mock 时继续透传真实命令。
+
 `lite-child_process` 提供 `spawn/spawnSync`、`exec/execSync`、`execFile/execFileSync`。默认转发原生 Node；`t_mock()` 后全部经内存命令分派并统一记入 `t_calls()`，`t_reset()` 仅清账本。内存 `spawn` 支持 `options.timeout`：到期以 `killSignal`（缺省 `SIGTERM`）终止，`exit`/`close` 带信号、不发 `error` 事件，提前退出时撤销定时器（对齐原生）。
 
 `execFile(file, args?, options?, callback?)` 按字面 argv 执行，默认以 UTF-8 字符串回调 `(error, stdout, stderr)`；异步接口返回子进程，支持超时、AbortSignal、maxBuffer 和 `promisify`（Promise 上有 `child`，成功值为 `{ stdout, stderr }`）。同步接口默认返回 Buffer，非零退出或启动失败时抛出携带执行结果的错误。
@@ -67,51 +71,40 @@ try {
 
 ESLint 命令集同样需要显式安装：`import { t_install } from 'litenvi-node/lite-cmd-eslint.mjs'; t_install();`。仅导入模块不会登记 ESLint，未安装时内存子进程执行 eslint 返回 `ENOENT`。安装时序与幂等语义与 Git 相同：卷建立前后皆可调用，重复调用保留已配置的脚本钩子和故障规则。ESLint 无子命令，`mgr.command('eslint').t_inject({ exit, stderr, once })` 匹配该命令的全部调用；与 Git 不同，ESLint 不提供检查点注入。
 
-内存 ESLint 委托使用方 node_modules 里的真实 eslint 包（`Linter` 类纯内存引擎，不 import 其磁盘文件面）执行规则：espree AST 解析、esquery visitor、files/ignores/languageOptions、插件与选项 schema 校验、内联 disable 指令全部按真实引擎口径处理，规则诊断与 fatal/fixable 统计为真实值；宿主未安装 eslint 时明确报错。与 lite-fs 的对接缝有三处：被检文件与配置从内存卷读取、文本经 `Linter.verify` 进入引擎（filename 只用于配置匹配与消息显示，引擎不做 IO）；Linter 以执行 cwd 构建，config 的 files 相对模式按内存路径匹配；配置/规则模块 import 的 `node:fs`/`fs`（裸名）注入 lite-fs 门面（未 mock 时透传真实 fs，mock 后读内存卷）。全程不落真实磁盘。
+ESLint 委托宿主安装的真实 `Linter` 执行规则，受检文件和目录通过 lite-fs 读取，`verify(text, configs, { filename })` 保留真实配置匹配、AST visitor、schema 校验、内联指令与诊断。配置为真实排除目录中的 `eslint.config.mjs`，可从 cwd 向上查找，或用 `--config <真实路径>` 指定；默认导出须为 flat config 数组。
 
-配置为 `eslint.config.mjs`（仅 .mjs），从执行 cwd 逐级向上查找或经 `--config <路径>` 显式指定，`export default` 须为数组。配置与规则/插件模块都取自内存卷，Node 原生 import() 无法读取，引擎以同步迷你加载器执行（近似 ESM）：仅支持文件顶部单行 import（default/named/namespace/副作用四种），specifier 支持 `node:*`、内存卷相对/绝对路径（递归加载、深度上限 16、环检测）与 npm 包（解析基按序：宿主进程入口脚本 → 宿主 cwd → 本库自身，覆盖 node_modules 安装与源码目录直连/file: 软链接两种引用形态——与项目真实 lint 同引擎同包；require(ESM) 需 Node ≥22.12，顶层 await 不支持）；多行 import、from 再导出、解构导出、动态 import() 明确报错；`import.meta.url/dirname` 注入为卷内路径。卷内模块支持 export default 与单行具名导出（const/let/var 多声明符、function/async function/class、`export { 别名列表 }`），named import 按导出名解析——导出存在性按 hasOwn 判定（值为 undefined 的合法导出仍可导入），且保留 ESM 动态绑定（导出 getter + 导入转发，源模块更新导出变量后导入方读到新值）；同一命令内按规范化路径缓存卷内模块（同文件多次导入共享同一实例，身份稳定）。`export default` 捕获与 `import.meta` 注入基于代码上下文掩码——字符串/模板/正则/注释内的关键字不误伤。插件/规则/选项形态与 schema 校验按真实引擎口径——带 options 的规则须声明 meta.schema。规则接口即 ESLint 规则 API：规则文件 `export default { meta, create(context) }`，report 的顶层 `line`/`column` 简写按 1 基约定自动转为引擎坐标，`node`/`loc` 形态与 meta 原样透传；文本类规则与 AST visitor 规则均可执行。
+配置与规则由 `await import()` 原生加载，不改写 import/export，不使用 eval/new Function，也不替换 `node:fs`。多行 import、具名再导出、顶层 await、动态绑定、import.meta 与模块身份由 Node 处理，覆盖率直接归属原始源码。配置按 mtime 查询参数重新加载，依赖保留 Node 原生缓存；规则模块状态不会随内存卷重置。自研规则访问运行数据应显式导入 lite-fs，第三方插件只验证消费侧配置与真实接线。字符串插件路径作为兼容输入仍支持，但也必须指向真实源码模块；文本 report 顶层 line/column 简写仍转换为标准 loc。
 
-CLI 支持 `--config`、`--format`（`stylish` 默认，仅列出有问题的文件并跨文件汇总 `✖ N problems`；`json` 为 results 数组，字段为真实 formatter 的子集，含无问题文件）、`--ext`（并入由 config 推导的候选扩展名——无 `files` 键的 item 隐式覆盖 js/mjs/cjs，`files` 模式的尾部花括号组（如 `**/*.{js,mjs}`）按展开提取扩展名）、`--max-warnings` 与目标文件/目录，选项与目标可交错；目录递归遍历并跳过 `node_modules` 与点开头目录，显式文件不受扩展名限制；未匹配任何配置（含被全局 ignores 排除）的文件静默跳过——跳过判定在读取之前（被忽略文件零读取）。退出码为近似口径：0=干净、1=存在 error 或 warning 超过 `--max-warnings`、2=fatal（配置缺失或执行失败、引擎错误、目标不匹配等）。`--fix`、stdin lint、处理器未覆盖——触到即明确报错。典型装配如下：
+通过 `spawn`／`execFile` 异步执行，`spawnSync` 返回退出码 2 并提示改用异步入口。命令钩子的 `runBuiltin()` 现在返回 Promise；通用故障仍由子进程门面处理。CLI 支持 `--config`、`--format stylish|json`、`--ext`、`--max-warnings` 和显式目标；`--ext` 与配置推导扩展名取并集，目录跳过点目录和 node_modules，忽略文件在读取前跳过。0=干净，1=规则错误或超过警告阈值，2=配置／执行错误；stylish 排版与 JSON 字段为近似子集。完整路径 glob、--fix、stdin lint 和处理器不在支持范围。
 
-插件测试按代码所有权划分职责：可维护源码的自研插件应显式使用 lite 组件，并在内存环境中验证自身业务逻辑；引用的第三方 npm 插件只验证本项目的加载、配置和规则接线是否正确，不承担第三方内部实现的黑盒测试，也不要求把其内部原生 I/O 全部转换为 lite 调用。加载器已提供的 fs 注入属于兼容能力，不构成对第三方插件及其依赖链的通用隔离承诺。
+下面先准备真实配置源码，再将受检文件放入内存卷；收尾清理两侧资源：
 
 ```js
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { t_install } from 'litenvi-node/lite-cmd-eslint.mjs';
 import liteFs from 'litenvi-node/lite-fs.mjs';
 import liteChildProcess from 'litenvi-node/lite-child_process.mjs';
 
-t_install();
-liteFs.t_mock();
-liteChildProcess.t_mock();
+const sourceRoot = mkdtempSync(path.join(tmpdir(), 'eslint-source-'));
 try {
-  liteFs.mkdirSync('/mock/app/lint-rules', { recursive: true });
-  liteFs.writeFileSync('/mock/app/lint-rules/no-trailing-spaces.mjs', [
-    'export default {',
-    '  create(context) {',
-    '    context.sourceCode.lines.forEach((line, index) => {',
-    '      if (line === line.trimEnd()) return;',
-    '      context.report({ line: index + 1, column: line.trimEnd().length + 1, message: "Trailing whitespace not allowed." });',
-    '    });',
-    '    return {};',
-    '  },',
-    '};',
-  ].join('\n'));
-  liteFs.writeFileSync('/mock/app/eslint.config.mjs', [
-    "import noTrailingSpaces from './lint-rules/no-trailing-spaces.mjs';",
-    '',
-    'const config = [{',
-    '  plugins: { app: { rules: { "no-trailing-spaces": noTrailingSpaces } } },',
-    '  rules: { "app/no-trailing-spaces": "error" },',
-    '}];',
-    '',
-    'export default config;',
-  ].join('\n'));
-  liteFs.writeFileSync('/mock/app/src/bad.js', 'const x = 1;  \n');
-  const result = liteChildProcess.spawnSync('eslint', ['src'], { cwd: '/mock/app', encoding: 'utf8' });
-  // result.status === 1，stdout 报告 app/no-trailing-spaces 并汇总 ✖ 1 problem。
+  const config = path.join(sourceRoot, 'eslint.config.mjs');
+  writeFileSync(config, "export default [{ rules: { 'no-debugger': 'error' } }];\n");
+  t_install();
+  liteFs.t_mock({ exclude: [sourceRoot] });
+  liteChildProcess.t_mock();
+  liteFs.mkdirSync('/mock/app/src', { recursive: true });
+  liteFs.writeFileSync('/mock/app/src/bad.js', 'debugger;\n');
+  const child = liteChildProcess.spawn('eslint', ['src', '--config', config, '--format', 'json'], { cwd: '/mock/app' });
+  let stdout = '';
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  const result = await liteChildProcess.waitForClose(child);
+  console.log(result.code, stdout); // 退出 1，诊断来自真实 no-debugger 规则。
 } finally {
   liteChildProcess.t_unmock();
   liteFs.t_unmock();
+  rmSync(sourceRoot, { recursive: true, force: true });
 }
 ```
 

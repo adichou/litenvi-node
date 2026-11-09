@@ -35,26 +35,186 @@ import liteServer from '../lite-server.mjs';
 const liteFsUrl = new URL('../lite-fs.mjs', import.meta.url).href;
 let fixtureSeq = 0;
 function writeFixture(code) {
-  const name = path.join(os.tmpdir(), `lite-cmd-node-fixture-${process.pid}-${++fixtureSeq}.mjs`);
+  const name = path.join(EXCLUDED, `lite-cmd-node-fixture-${process.pid}-${++fixtureSeq}.mjs`);
   realFs.writeFileSync(name, `import liteFs from '${liteFsUrl}';\n${code}\n`);
   return name;
 }
 
-/** 场景：宿主未安装 npm 时，版本探测通过公开执行结果报告失败。 */
-test('npm 环境缺失：空 PATH 时版本查询明确失败', () => {
+/** 场景：模拟 npm 固定版本，不依赖宿主 PATH 或 npm 安装。 */
+test('npm 固定版本：空 PATH 也返回 10.9.0', () => {
   const done = setup();
   const originalPath = process.env.PATH;
   try {
-    // 输入：当前运行环境没有任何 npm 搜索目录，不替换命令实现或私有缓存
+    // 输入：移除宿主 npm 搜索路径，分别查询两个版本入口。
     process.env.PATH = '';
-    const result = liteChildProcess.spawnSync('npm', ['-v'], { encoding: 'utf8' });
-    // 预期：启动边界正常，但命令执行失败并给出依赖缺失原因
-    assert.equal(result.status, 1, '缺少 npm 安装时探测应失败');
-    assert.match(result.stderr, /无法读取当前 npm 的版本元数据/, '失败说明应指出缺失的安装元数据');
+    for (const flag of ['-v', '--version']) {
+      const result = liteChildProcess.spawnSync('npm', [flag], { encoding: 'utf8' });
+      // 预期 1：版本为固定模拟值，不需要读取本机安装信息。
+      assert.equal(result.status, 0, '固定 npm 版本查询不应依赖本机安装');
+      assert.equal(result.stdout, '10.9.0\n', '模拟 npm 版本应固定为 10.9.0');
+      assert.equal(result.stderr, '', '固定 npm 版本查询不应产生错误');
+    }
+    // 预期 2：其余工具链信息使用固化快照，JSON 和文本输出均不需要本机 npm。
+    const metadata = liteChildProcess.spawnSync('npm', ['--versions', '--json'], { encoding: 'utf8' });
+    assert.equal(metadata.status, 0, '固定工具链信息查询应成功');
+    const versions = JSON.parse(metadata.stdout);
+    assert.equal(versions.npm, '10.9.0', '工具链信息应保留固定 npm 版本');
+    assert.equal(versions.node, '22.12.0', '工具链信息应使用采集的 Node 版本');
+    assert.equal(versions.v8, '12.4.254.21-node.21', '工具链信息应使用采集的 V8 版本');
+    const text = liteChildProcess.spawnSync('npm', ['--versions'], { encoding: 'utf8' });
+    assert.equal(text.status, 0, '文本工具链信息查询应成功');
+    assert.match(text.stdout, /npm: '10.9.0'/, '文本信息应包含固定 npm 版本');
+
   } finally {
     if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
     done();
   }
+});
+
+/** 场景：真实测试夹具执行名称筛选、重复运行、失败退出和实际覆盖率，不回放 TAP。 */
+test('node --test：真实断言、名称过滤、重复执行及覆盖率', async () => {
+  const fixture = writeFixture(`
+    import { test } from 'node:test';
+    import assert from 'node:assert/strict';
+    test('alpha', function alpha() {
+      console.log('fixture-executed:' + process.env.LITE_TEST_INPUT);
+      assert.equal(Number(process.env.LITE_TEST_INPUT) * 2, 4, '实际计算结果应为 4');
+    });
+    test('beta', function beta() { assert.equal(1 + 1, 3, '真实失败断言'); });
+  `);
+  const done = setup();
+  const run = async (args, value) => {
+    const child = liteChildProcess.spawn('node', args, { env: { LITE_TEST_INPUT: value }, encoding: 'utf8' });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const closed = await liteChildProcess.waitForClose(child);
+    return { ...closed, stdout, stderr };
+  };
+  try {
+    // 输入：同一真实文件分别筛选通过、修改输入后重跑失败，再运行全部并收集覆盖率。
+    const pass = await run(['--test', '--test-name-pattern', '^alpha$', fixture], '2');
+    const fail = await run(['--test', '--test-name-pattern=^alpha$', fixture], '3');
+    const coverage = await run(['--test', '--experimental-test-coverage', fixture], '2');
+    // 预期 1：名称筛选只执行 alpha，输出来自真实方法体。
+    assert.equal(pass.code, 0, `合法输入应通过：${pass.stderr}`);
+    assert.match(pass.stdout, /^ok 1 - alpha$/m, '应输出真实 alpha 通过结果');
+    assert.match(pass.stdout, /fixture-executed:2/, '应真实执行方法体并读取本次命令输入');
+    assert.doesNotMatch(pass.stdout, /not ok .*beta/, '未匹配名称的 beta 不应执行');
+    // 预期 2：新上下文重复加载相同文件，不复用首次结果或泄漏到宿主测试注册表。
+    assert.equal(fail.code, 1, '改变输入后真实断言失败应退出 1');
+    assert.match(fail.stdout, /fixture-executed:3/, '再次运行应读取新的输入并重新执行');
+    assert.match(fail.stdout, /not ok 1 - alpha/, '应报告真实 alpha 失败');
+    assert.match(fail.stdout, /实际计算结果应为 4/, '失败详情应来自真实断言');
+    // 预期 3：覆盖率运行整个文件，失败退出码和实际 V8 覆盖率同时保留。
+    assert.equal(coverage.code, 1, '覆盖率运行应保留 beta 的真实失败退出码');
+    assert.match(coverage.stdout, /not ok 2 - beta/, '覆盖率运行应执行未筛选的 beta');
+    assert.match(coverage.stdout, /# start of coverage report/, '应输出原生测试运行器的覆盖率报告');
+    assert.match(coverage.stdout, /line %.*branch %.*funcs %/, '覆盖率表应包含行、分支和函数指标');
+    assert.doesNotMatch(coverage.stdout, /lite-cmd-node(?:-test-worker)?\.mjs/, '目标项目覆盖率不应混入虚拟命令执行器');
+    assert.match(coverage.stdout, new RegExp(path.basename(fixture).replaceAll('.', '\\.')), '覆盖率应包含实际执行的夹具文件');
+  } finally { done(); realFs.unlinkSync(fixture); }
+});
+
+/** 场景：测试启动参数、源码作用域和执行错误均明确失败，不能悄悄回退或产生成功 TAP。 */
+test('node --test 边界：非法参数、缺失源码与内存独有源码明确失败', async () => {
+  const fixture = writeFixture(`import { test } from 'node:test'; test('probe', () => console.log('真实执行'));`);
+  const done = setup();
+  liteFs.mkdirSync('/mock', { recursive: true });
+  liteFs.writeFileSync('/mock/memory-only.mjs', `throw new Error('不应被原生加载');`);
+  const scenarios = [
+    { args: ['--test'], error: /需要显式指定测试文件/ },
+    { args: ['--test', '--test-name-pattern'], error: /缺少表达式/ },
+    { args: ['--test', '--unsupported', fixture], error: /测试运行参数未实现/ },
+    { args: ['--test', '--test-name-pattern=[', fixture], error: /regular expression|Invalid/i },
+    { args: ['--test', '--test-coverage-include', '--experimental-test-coverage', fixture], error: /缺少 glob/ },
+    { args: ['--test', '--test-coverage-exclude'], error: /缺少 glob/ },
+    { args: ['--test', '/mock/missing.mjs'], error: /Cannot find module/ },
+    { args: ['--test', '/mock/memory-only.mjs'], error: /Cannot find module/ },
+  ];
+  try {
+    // 输入：每次都通过公共子进程入口启动真实命令实现。
+    for (const scenario of scenarios) {
+      const child = liteChildProcess.spawn('node', scenario.args);
+      let output = '';
+      child.stdout.on('data', chunk => { output += chunk; });
+      child.stderr.on('data', chunk => { output += chunk; });
+      const closed = await liteChildProcess.waitForClose(child);
+      // 预期 1：不支持的输入明确失败，不能凭空生成通过结果。
+      assert.equal(closed.code, 1, `${scenario.args.join(' ')} 应明确失败`);
+      assert.match(output, scenario.error, `${scenario.args.join(' ')} 应保留实际失败原因`);
+      assert.doesNotMatch(output, /^ok \d+ - probe$/m, '启动或加载失败不能冒充测试已通过');
+    }
+  } finally { done(); realFs.unlinkSync(fixture); }
+});
+
+/** 场景：覆盖率范围旗标把统计限定在指定 glob 内——范围外真实模块不计入覆盖率表，等号与空格取值均可。 */
+test('node --test 覆盖率范围：include/exclude glob 生效', async () => {
+  const foreignDir = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-cov-foreign-'));
+  const foreign = path.join(foreignDir, 'foreign.mjs');
+  realFs.writeFileSync(foreign, 'export const v = 1;\n');
+  const fixture = writeFixture(`
+    import { test } from 'node:test';
+    import { v } from '${pathToFileURL(foreign).href}';
+    test('scope', function scope() { if (v !== 1) throw new Error('范围外模块应真实加载'); });
+  `);
+  const done = setup();
+  const run = async args => {
+    const child = liteChildProcess.spawn('node', args);
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const closed = await liteChildProcess.waitForClose(child);
+    return { ...closed, stdout, stderr };
+  };
+  try {
+    const dir = path.dirname(fixture);
+    const foreignReal = realFs.realpathSync(foreignDir); // 覆盖率按 realpath 匹配（/var → /private/var）
+    // 输入：默认运行、include 锚定夹具目录（等号取值）、exclude 排除范围外目录（空格取值，真实路径）。
+    const all = await run(['--test', '--experimental-test-coverage', fixture]);
+    const scoped = await run(['--test', '--experimental-test-coverage', `--test-coverage-include=${dir}/**`, fixture]);
+    const excluded = await run(['--test', '--experimental-test-coverage', '--test-coverage-exclude', `${foreignReal}/**`, fixture]);
+    // 预期 1：默认运行把加载到的范围外真实模块计入覆盖率表。
+    assert.equal(all.code, 0, `范围用例应通过：${all.stderr}`);
+    assert.match(all.stdout, /foreign\.mjs/, '默认运行应把范围外真实模块计入覆盖率');
+    // 预期 2：include 锚定后范围外模块消失，夹具自身仍被统计。
+    assert.doesNotMatch(scoped.stdout, /foreign\.mjs/, 'include 应把范围外模块排除出覆盖率');
+    assert.match(scoped.stdout, /lite-cmd-node-fixture-[^.]*\.mjs/, 'include 后夹具自身仍应统计');
+    // 预期 3：exclude（空格取值）同样把范围外模块排除。
+    assert.doesNotMatch(excluded.stdout, /foreign\.mjs/, 'exclude 应把范围外模块排除出覆盖率');
+    assert.match(excluded.stdout, /lite-cmd-node-fixture-[^.]*\.mjs/, 'exclude 不应波及夹具自身统计');
+  } finally { done(); realFs.unlinkSync(fixture); realFs.rmSync(foreignDir, { recursive: true, force: true }); }
+});
+
+/** 场景：等待中的真实测试 Worker 随虚拟子进程终止，后续命令仍正常运行。 */
+test('node --test 信号：终止等待中的真实 Worker 并清理资源', async () => {
+  const fixture = writeFixture(`
+    import { test } from 'node:test';
+    test('blocked', async () => {
+      const channel = new BroadcastChannel('litenvi-blocked-test');
+      console.log('waiting-for-signal');
+      await new Promise(resolve => { channel.onmessage = resolve; });
+      channel.close();
+    });
+  `);
+  const done = setup();
+  let child;
+  try {
+    // 输入：真实方法已执行到等待状态，再从公共句柄发送终止信号。
+    child = liteChildProcess.spawn('node', ['--test', '--', fixture]);
+    const closed = liteChildProcess.waitForClose(child);
+    await new Promise(resolve => {
+      child.stdout.on('data', chunk => { if (String(chunk).includes('waiting-for-signal')) resolve(); });
+    });
+    const killed = child.kill('SIGTERM');
+    const result = await closed;
+    // 预期 1：回执保留信号，Worker 被清理，不生成伪造成功结果。
+    assert.equal(killed, true, '应能终止等待中的测试命令');
+    assert.deepEqual(result, { code: null, signal: 'SIGTERM' }, '终止回执应保留 SIGTERM');
+    // 预期 2：终止不会污染宿主命令分派。
+    const version = liteChildProcess.spawnSync('npm', ['-v'], { encoding: 'utf8' });
+    assert.equal(version.stdout, '10.9.0\n', '终止后后续命令仍应正常运行');
+  } finally { child?.kill('SIGKILL'); done(); realFs.unlinkSync(fixture); }
 });
 
 /** 场景：原生对照隔离调试器预加载和强制颜色，业务环境变量与脚本自身 stderr 保持可见。 */
@@ -132,8 +292,6 @@ test('真实 Node 对照：版本、脚本输出、argv/env、模块加载与退
       responses.push({ code: result.status, stdout: result.stdout, stderr: result.stderr });
       await run(node, args);
     }
-    const npm = liteChildProcess.spawnSync('npm', ['-v'], options);
-    responses.push({ code: npm.status, stdout: npm.stdout, stderr: npm.stderr });
     await run(node, ['-e', `console.log('stdout'); console.error('stderr');`]);
     await run(node, ['-e', `console.log(JSON.stringify(process.argv.slice(1)));`, 'argument.mjs']);
     await run(node, ['-e', `console.log(process.env.LITE_NODE_REFERENCE); process.exitCode = 3;`]);
@@ -375,11 +533,8 @@ test('导入即登记：node/npm 在 mgr 登记名单、node 命令路径为 exe
   assert.equal(NODE_COMMAND_PATH, '/mock-cmd/usr/local/bin/node', 'node 命令路径应为命名空间内完整路径');
 });
 
-/** 场景：版本探测——node/npm 的 -v 同步回包分别对应本机安装版本。 */
-test('版本探测：node -v 与 npm -v 同步回本机版本', () => {
-  // 输入：先通过真实命令获取 npm 安装版本，再装配内存环境
-  const expectedNpm = liteChildProcess.spawnSync('npm', ['-v'], { encoding: 'utf8', env: nativeReferenceEnv() });
-  assert.equal(expectedNpm.status, 0, '本机 npm 版本探测应成功');
+/** 场景：版本探测——node 使用宿主版本，npm 固定为 10.9.0。 */
+test('版本探测：node 回宿主版本，npm 回固定 10.9.0', () => {
   const done = setup();
   try {
     // 输入：spawnSync node -v / npm -v
@@ -391,8 +546,8 @@ test('版本探测：node -v 与 npm -v 同步回本机版本', () => {
     assert.equal(nodeV.stdout.trim(), process.version, 'node 版本应与 process.version 一致');
     // 预期 3：npm -v 成功
     assert.equal(npmV.status, 0, 'npm -v 应成功');
-    // 预期 4：npm 版本与本机 npm 的真实响应一致
-    assert.equal(npmV.stdout, expectedNpm.stdout, 'npm 版本应与本机安装版本一致');
+    // 预期 4：npm 版本使用固定模拟值，不依赖本机安装。
+    assert.equal(npmV.stdout, '10.9.0\n', 'npm 版本应固定为 10.9.0');
   } finally {
     done();
   }

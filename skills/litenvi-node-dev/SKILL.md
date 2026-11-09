@@ -95,7 +95,7 @@ description: 开发 litenvi-node 仓库本身时使用。修改 lite-* 门面源
 - **exec shell 支持面有限**：普通引号、初始环境变量展开、`;`/`&&`/`||`、缓冲管道、`<`/`>`/`>>`、`1>&2`/`2>&1`、局部 `cd`。命令替换、通配符、循环未实现——补语法须同步 README 能力清单与用例。
 - **fd 0 暂存**：命令输入经 `pkg_stageStdin` 暂存，虚拟命令显式用 `liteFs.readFileSync(0)` 同步读取，写侧 EBADF；释放时机与 `pkg_releaseStdin` 配对。
 - **Git 锁语义**：add/rm/commit 独占索引锁；status 简化可选锁模型（默认尝试持锁、被占继续读）。扩展其他写命令的锁语义时在头注释声明口径。
-- **ESLint 真实引擎委托**：内存 ESLint 委托宿主 node_modules 的 eslint 包（Linter 类纯内存，不 import 其磁盘文件面）——`.eslintrc.json` 不支持；`eslint.config.mjs` 与规则模块经同步迷你加载器执行（仅顶部单行 import：`node:*`/内存卷路径（含具名导出与 named import）/npm 包——解析基按序为宿主入口脚本 → 宿主 cwd → 本库自身，覆盖 node_modules 安装与源码直连/file: 软链接两种形态）；`node:fs`/`fs` 注入 lite-fs 门面（mock 后规则读内存卷）；files/ignores/languageOptions、espree AST visitor、schema 校验、内联 disable 指令全部真实口径（带 options 的规则须声明 meta.schema）；文本类 report 顶层 line/column 简写按 1 基自动转引擎 0 基 loc；卷内模块按路径在单次命令内缓存（同文件多次导入同一实例）；源码改写基于代码上下文掩码（字符串/模板/正则/注释内的 export default、import.meta 不误伤）；无子命令，故无 `subcommand` 故障匹配、无 checkpoint 注入。改执行机制须同步头注释与 README。
+- **ESLint 原生模块加载**：t_install 后经异步 spawn/execFile 执行，spawnSync 明确拒绝。配置与规则源码必须留真实排除目录，由 await import 加载；不改写源码、不使用 eval/new Function、不把 node:fs 自动换成 lite-fs。受检文本和自研规则的运行数据显式通过 lite-fs。配置按 mtime 重新载入，依赖保持 Node 缓存；改动依赖后不应假定内存卷重置会清除原生模块缓存。支持面、规则诊断与命令退出码在头注释和 README 中定义，覆盖率以原始文件位置验证，不能只断言文件名或栈帧。
 - **缩进不统一**（2/4 空格混存）：跟随所在文件，不顺手全局统一。
 - **文档先于记忆**：README 与头注释与实现三处一致才算完成；"先改代码后补文档"在本仓库算未完成。
 
