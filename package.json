@@ -4,15 +4,16 @@
   "description": "可切换的 Node 与浏览器环境门面：文件系统、进程、Git、HTTP、时钟和 Playwright，测试通过 lite-* 组件装配内存环境。",
   "type": "module",
   "exports": {
-    "./*": "./*"
+    "./*": "./scripts/*"
   },
   "files": [
-    "*.mjs",
-    "*.cjs"
+    "scripts/*.mjs",
+    "scripts/*.cjs"
   ],
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
-    "test:coverage": "node --test --experimental-test-coverage tests/*.test.mjs"
+    "test": "node --test scripts/tests/*.test.mjs",
+    "test:coverage": "node --test --experimental-test-coverage scripts/tests/*.test.mjs",
+    "lint": "eslint . --max-warnings 0"
   },
   "license": "MIT",
   "repository": {
@@ -21,11 +22,13 @@
   },
   "dependencies": {
     "@sinonjs/fake-timers": "15.4.0",
-    "shell-quote": "1.12.0",
-    "playwright": "^1.64.1"
+    "playwright": "^1.64.1",
+    "shell-quote": "1.12.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
-    "eslint": "9.39.4"
+    "atb-eslint-plugin": "file:../atb-eslint-plugin",
+    "eslint": "9.39.4",
+    "eslint-plugin-package-json": "0.91.2"
   }
 }

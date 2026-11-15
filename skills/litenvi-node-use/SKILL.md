@@ -5,7 +5,7 @@ description: 在业务项目中使用 litenvi-node 编写测试或装配测试�
 
 # litenvi-node 使用指南
 
-litenvi-node 是可切换门面库：业务代码统一 import `litenvi-node/lite-*.mjs`（代替 `node:fs`、`node:child_process`、`node:http`、`process` 等），默认原样透传原生实现，生产行为不变；测试里 `t_mock()` 打开内存世界、`t_unmock()` 关闭。各门面行为规格以仓库 README 与模块头注释为准。
+litenvi-node 是可切换门面库：业务代码统一 import `litenvi-node/lite-*.mjs`（代替 `node:fs`、`node:child_process`、`node:http`、`process` 等），默认原样透传原生实现，生产行为不变；测试里 `t_mock()` 打开内存世界、`t_unmock()` 关闭。各门面行为规格以仓库 README 与模块头注释为准；带可执行演示的入门教程见仓库 GUIDE.md。
 
 ## 自研代码、第三方代理与测试范围
 
@@ -23,6 +23,8 @@ import liteChildProcess from 'litenvi-node/lite-child_process.mjs';
 
 // 总装模式：起手先复位（状态是进程级单例），try/finally 归位。
 liteFs.t_unmock();
+liteChildProcess.t_unmock();
+liteFs.t_mock({ exclude: [sourceDir] }); // exclude 须非空：登记留在真实磁盘的源码目录，其余全部落内存卷
 liteChildProcess.t_mock();
 try {
   // 业务代码照常 import 门面，这里跑在内存世界
@@ -42,7 +44,7 @@ try {
 
 ### lite-fs：内存文件系统
 
-- `t_mock({ exclude: [...] })` 声明保留真实访问的目录（模块源码、静态资源），排除目录外**全部**落内存卷——黑名单制，防越界写穿透真实磁盘。
+- `t_mock({ exclude: [...] })` 声明保留真实访问的目录（模块源码、静态资源），排除目录外**全部**落内存卷——黑名单制，防越界写穿透真实磁盘；`exclude` 须非空，不传直接报错。
 - 内存卷覆盖常用同步操作，含 `readdirSync(..., { withFileTypes: true })`；错误语义与真实 fs 一致（ENOENT/EEXIST/EISDIR…）。
 - `t_inject({ op?, path?, code })` 注入 fs 错误（如 EACCES），返回移除函数。
 - `markPersistent(dir)` 登记持久根：跨 `t_unmock/t_mock` 复位存活（一般由库内部使用，如命令系统卷）。
@@ -56,17 +58,19 @@ try {
 
 ### lite-cmd-*：命令集
 
-- node/os 系统命令导入即登记（node/npm、open/ls/pwd/cwd/kill、mkdir/rm/cp/mv/cat/touch/test、cd/exit 内建）。
+- **node/os 系统命令须显式安装**（同 Git 口径）：`import { t_install } from 'litenvi-node/lite-cmd-node.mjs'; t_install();`（node/npm）与 `import { t_install } from 'litenvi-node/lite-cmd-os.mjs'; t_install();`（open/ls/pwd/cwd/kill、mkdir/rm/cp/mv/cat/touch/test、cd/exit 内建）——仅导入不登记，执行返回 `ENOENT`；幂等。
 - **Git 须显式安装**：`import { t_install } from 'litenvi-node/lite-cmd-git.mjs'; t_install();`——仅导入不会登记，执行返回 `ENOENT`。`t_install()` 在内存卷建立前后调用皆可，幂等。
 - **ESLint 显式安装与异步加载**：调用 `t_install()` 后经 `spawn`／`execFile` 执行。`eslint.config.mjs` 与规则位于 exclude 真实源码目录，Node 原生 await import；受检文件留在内存卷。配置/自研规则需要内存数据时显式使用 lite-fs，原生 fs 不被自动替换。`spawnSync` 明确失败；真实 ESM 支持顶层 await、多行 import 和再导出，覆盖率直接归属原文件。
 - 配置入口 `mgr.command(nameOrPath)`：`t_onRun(handler)` 配置行为钩子（`(call, runBuiltin) => result`，`null` 移除）；`t_inject(fault)` 注入故障 `{ exit?, stderr?, wait?, once?, subcommand? }`，git 可按 `subcommand` 匹配（如 `{ subcommand: 'add', exit: 128, stderr: 'index.lock', once: true }`）。
-- 用户级临时命令：`mgr.t_defineUserCommand(name, impl)`（impl 含 `pkg_run/pkg_runSync`），落 `/mock/bin` 可遮蔽系统命令，须先 mock lite-fs，卷复位即清。
+- 用户级临时命令：`mgr.t_defineUserCommand(name, impl)`（impl 含 `i_run/i_runSync`），落 `/mock/bin` 可遮蔽系统命令，须先 mock lite-fs，卷复位即清。
 
 ### lite-process：进程环境
 
-- `t_mock({ cwd, argv?, env?, pid? })` 进入假世界；`t_exitCodes()` 读取 `exit()` 退出意图（`ProcessExitError` 语义：记录在案并上抛，由调用方收场）；`t_unmock()` 恢复原生。
+- `t_mock({ cwd, argv?, env?, pid? })` 进入假世界；`t_exitCodes()` 读取 `exit()` 退出意图（`ProcessExitError` 语义：记录在案并上抛，由调用方收场）；`t_unmock()` 恢复原生。捕获退出异常时，从 `litenvi-node/lite-process-exit-error.mjs` 直接导入 `ProcessExitError`。
 
 ### lite-http / lite-server：HTTP 客户端与服务端
+
+两个门面共用包内 `i-http-transport.mjs` 处理传输故障与服务路由。使用方不导入或装配 transport，仍通过门面的 `t_mock/t_unmock/t_inject` 操作；两侧复位只清理各自配置。
 
 - `liteHttp.t_mock()` + `liteServer.t_mock()` 后进程内不触网；无监听服务按 `ECONNREFUSED` 拒连。
 - 服务端：`liteServer.createServer(handler)` 可创建多个服务；`listen(0)` 绑真实回环端口（供浏览器访问）；模拟外部服务用 `listen({ host: 'api.example.test', port: 443, virtual: true }, cb)` 只注册域名端口不绑 socket，其他域名不会误入。`liteServer.t_port()` 返回第一个仍在监听的回环端口。
@@ -103,7 +107,7 @@ import mgr from 'litenvi-node/lite-cmd-mgr.mjs';
 import liteFs from 'litenvi-node/lite-fs.mjs';
 import liteChildProcess from 'litenvi-node/lite-child_process.mjs';
 
-liteFs.t_mock();
+liteFs.t_mock({ exclude: [sourceDir] }); // exclude 须非空：登记真实源码目录，其余全落内存卷
 liteChildProcess.t_mock();
 t_install(); // 幂等；卷建立前后皆可
 const removeFault = mgr.command('git').t_inject({ subcommand: 'commit', exit: 128, stderr: 'index.lock', once: true });

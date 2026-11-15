@@ -6,7 +6,9 @@
 
 ## lite-http 门面
 
-`litenvi-node/lite-http.mjs` 是 node:http 客户端的可切换门面，供业务代码统一 import：默认（未设置内存实现）原样转发真实 `node:http`，生产行为不变。`t_mock()` 设置内存 http 实现（幂等，复用当前实例）、`t_unmock()` 移除并回到真实实现（规则随实例丢弃）。错误注入是内存实现上的能力：`t_inject({ url?, method?, path?, query?, status?: 400..599, wait?, once?, error?/body? })` 增加规则并返回移除函数；至少指定错误状态或 Promise 闸门。命中传输层错误时不执行 handler；未命中则经 `lite-server` 执行真实 handler，无监听服务时按 `ECONNREFUSED` 拒连。`liteServer.t_inject()` 使用相同匹配条件，作用于 handler 执行后的响应阶段。回调式 `request/get` 与真实 ClientRequest 消费面兼容（statusCode / data / end / error 事件）；状态为模块级单例，同进程内经同一 specifier 导入（含动态 `import()`）共享同一实例。
+客户端与服务端共用包内 `i-http-transport.mjs`，两个门面不互相导入。该内部模块只提供 `i_` 接口，负责传输层故障和已登记服务的路由分派，不提供公共入口或独立 mock 开关。使用方继续通过现有门面操作：`lite-http` 适配客户端事件与响应流，`lite-server` 处理监听、真实 handler、响应阶段故障、socket 回写和观测。客户端复位清除传输层故障，服务端复位撤销路由并清除服务端故障，两侧互不清理对方配置；已经命中的请求保留各自的故障配置。
+
+`litenvi-node/lite-http.mjs` 是 node:http 与 node:https 客户端的可切换门面，供业务代码统一 import：默认（未设置内存实现）原样转发真实 `node:http` / `node:https`（`request/get` 走 http，`httpsRequest/httpsGet` 走 https，对象形态 options 缺省补 protocol `'https:'`，与原生语义一致），生产行为不变。`t_mock()` 设置内存 http 实现（幂等，复用当前实例）、`t_unmock()` 移除并回到真实实现（规则随实例丢弃）。错误注入是内存实现上的能力：`t_inject({ url?, method?, path?, query?, status?: 400..599, wait?, once?, error?/body? })` 增加规则并返回移除函数；至少指定错误状态或 Promise 闸门。命中传输层错误时不执行 handler；未命中则经 `lite-server` 执行真实 handler，无监听服务时按 `ECONNREFUSED` 拒连。`liteServer.t_inject()` 使用相同匹配条件，作用于 handler 执行后的响应阶段。回调式 `request/get/httpsRequest/httpsGet` 与真实 ClientRequest 消费面兼容（statusCode / data / end / error 事件）；https 面 mock 后走同一内存传输（协议标记进入匹配 URL 与 443 端口缺省，内存世界不真实外联）；状态为模块级单例，同进程内经同一 specifier 导入（含动态 `import()`）共享同一实例。
 
 `liteServer.t_inject({ operation: 'close', wait, once: true })` 可使服务实际关闭后的 close 事件和回调等待 Promise 闸门，用于模拟关闭收尾挂起；该规则不影响请求响应。移除规则只阻止后续命中，已命中的闸门仍须由调用方释放。内存 Node 子进程注册了信号监听器时，`child.kill()` 将信号送入该进程的监听器；没有监听器时按信号终止，`SIGKILL` 始终直接终止。
 
@@ -19,6 +21,12 @@
 
 `litenvi-node/lite-process.mjs` 提供进程环境门面，默认透传真实 `process`。测试通过 `t_mock({ cwd, argv?, env?, pid? })` 设置模拟环境，通过 `t_exitCodes()` 读取退出意图，通过 `t_unmock()` 恢复原生环境。子进程执行由 `lite-child_process` 提供，命令脚本与故障通过命令句柄的 `t_onRun/t_inject` 配置。
 
+模拟退出使用公开的 `ProcessExitError` 类型，携带 `exitCode`，供调用方识别和处理退出意图。所有使用方直接从 `litenvi-node/lite-process-exit-error.mjs` 导入该类型，命令实现与执行层共用同一个类。该模块不依赖其他门面；`lite-process` 负责进程环境，`lite-cmd-mgr` 负责命令管理，均不转出退出异常。
+
+## lite-os 门面
+
+`litenvi-node/lite-os.mjs` 是 node:os 路径锚点与只读标识的可切换门面：默认原样转发真实 `node:os`，生产行为不变。`t_mock({ homedir?, tmpdir?, platform?, arch?, hostname? })` 按键覆盖（已覆盖时按键合并），`t_unmock()` 移除。给出的键替换为指定值，未给出的键与本机同源（只读合理缺省）。`homedir/tmpdir` 是内存世界的路径锚点——注册表、用户级配置等 `<home>/.…` 路径的落点，覆盖后所有经本门面的路径解析随之落入调用方装配的世界；`EOL` 为静态常量原样透传。状态为模块级单例，同进程内经同一 specifier 导入共享同一实例。
+
 ## lite-fs 门面
 
 `litenvi-node/lite-fs.mjs` 是 `node:fs` 的可切换门面。`t_mock({ exclude: [...] })` 声明保留真实访问的源码或静态资源目录，排除目录之外的路径全部使用内存卷；未 mock 时透传真实文件系统。内存卷覆盖常用同步文件操作，并支持 `readdirSync(..., { withFileTypes: true })` 的文件、目录和符号链接类型；`statSync` 逐段解析符号链接（跟随链接链，循环 ELOOP；`lstatSync` 保留链接条目且 size 为目标字符串字节长），rename 覆盖既有目标按 rename(2) 口径报 EISDIR/ENOTDIR/ENOTEMPTY，错误码与 syscall 标签（如 `rm` 缺失的 `lstat`、`utimes` 缺失的 `utime`、`copyfile`）对齐原生。`copyFileSync` 从排除目录复制到内存路径时读取真实源、只写入内存目标，可用 `COPYFILE_EXCL` 防止覆盖（卷内复制同样支持 EXCL 与 copyfile 口径错误）；其他多路径操作仍按首个路径选择作用域。`t_inject({ op?, path?, code })` 可向内存操作注入错误，返回移除函数；内存范围内未实现的操作会明确报错。
@@ -29,7 +37,7 @@
 
 `lite-cmd-node` 的入口检查通过 lite-fs，真实入口及其代码资源须由调用方在 `exclude` 中明确登记。`node --test <文件…>` 的 Worker 启动逻辑内置于 `lite-cmd-node.mjs` 的私有方法，无独立入口文件；在独立 Worker 中调用原生 `node:test`（`isolation: 'none'`），支持 `--test-name-pattern <表达式>`／`--test-name-pattern=<表达式>`、`--experimental-test-coverage`、覆盖率范围旗标 `--test-coverage-include`／`--test-coverage-exclude`（空格与等号取值均可、可重复，经 `run()` 的 `coverageIncludeGlobs`／`coverageExcludeGlobs` 透传，语义与原生命令一致——显式 include 会覆盖 node_modules 默认排除）及 `--` 后的字面文件路径。输出为真实 TAP 与实际 V8 覆盖率，失败退出 1，每次运行独立模块缓存，不启动 OS 子进程；终止或取消同步回收 Worker。测试 Worker 的 lite 模块单例与父世界独立，测试文件需自行装配自己的数据环境。测试文件只存在于内存卷时不能由原生模块加载器执行；没有显式文件或未知测试选项明确失败，不回放结果、不静默退回普通 import。
 
-模拟 `npm -v`／`npm --version` 固定返回 `10.9.0`，`npm --versions`／`npm --versions --json` 返回 2026-11-09 本机采集并固化的工具链信息（Node `22.12.0`、V8 `12.4.254.21-node.21` 等；仅工具链字段，不包含按当前目录变化的项目版本）。不扫描宿主 PATH、不读取本机 npm 安装信息；其他 npm 子命令仍明确未实现。未开启 mock 时继续透传真实命令。
+模拟 `npm -v`／`npm --version` 固定返回 `10.9.0`，`npm --versions`／`npm --versions --json` 返回 2026-11-09 本机采集并固化的工具链信息（Node `22.12.0`、V8 `12.4.254.21-node.21` 等；仅工具链字段，不包含按当前目录变化的项目版本）。不扫描宿主 PATH、不读取本机 npm 安装信息。`npm run <script> [-- args]` 在内存世界执行：自 cwd 逐级向上读最近 `package.json` 的 `scripts[name]`，经 shell-quote 解析为单命令 argv 后经内存分派执行（操作符／管道／重定向等 shell 语法明确报错），banner（`> name@version script` 与命令行，模拟口径统一记 stdout）、嵌套输出与退出码透传，未登记命令报 127，`--` 之后的参数原样追加；同步面要求嵌套命令提供同步实现，仅异步的命令（如 node 脚本）按其自身限制或 127 明确失败。pre/post 生命周期钩子、`npm test`／`start` 等别名、`node_modules/.bin` PATH 前缀与 `npm_*` 环境变量未实现，调用即明确报错；其他 npm 子命令仍明确未实现。未开启 mock 时继续透传真实命令。
 
 `lite-child_process` 提供 `spawn/spawnSync`、`exec/execSync`、`execFile/execFileSync`。默认转发原生 Node；`t_mock()` 后全部经内存命令分派并统一记入 `t_calls()`，`t_reset()` 仅清账本。内存 `spawn` 支持 `options.timeout`：到期以 `killSignal`（缺省 `SIGTERM`）终止，`exit`/`close` 带信号、不发 `error` 事件，提前退出时撤销定时器（对齐原生）。
 
@@ -37,7 +45,7 @@
 
 `exec(command, ...)` 使用内存 `/bin/sh -c`；exec 适配和 shell 实现均为 `lite-child_process.mjs` 的私有方法，解析复用 `shell-quote@1.12.0`（MIT）。当前支持普通引号、初始环境变量展开、`;`/`&&`/`||`、缓冲管道、`<`/`>`/`>>`、`1>&2`/`2>&1` 和局部 `cd`。命令替换、通配符、循环等完整 shell 语法尚未实现；mock 不启动真实 shell。Node 脚本的同步执行限制保持现状；`fork/IPC` 尚未提供。
 
-`mgr.command(nameOrPath)` 查询已登记的命令句柄；Git 须先调用 `t_install()`，之后可在内存卷建立前配置 `t_onRun/t_inject`；`mgr.pkg_resolve(nameOrPath)` 是包内执行寻址接口，要求命令文件存在，首次可惰性安装系统命令。命令对象的 `t_onRun/t_inject` 为测试专用配置接口，不再提供 `mgr.inject`；`pkg_takeFault/pkg_runSync` 供包内执行层协作；测试通过上述 child_process 公共接口触发执行。
+`mgr.command(nameOrPath)` 查询已登记的命令句柄；Git 须先调用 `t_install()`，之后可在内存卷建立前配置 `t_onRun/t_inject`；`mgr.i_resolve(nameOrPath)` 是包内执行寻址接口，要求命令文件存在，首次可惰性安装系统命令。命令对象的 `t_onRun/t_inject` 为测试专用配置接口，不再提供 `mgr.inject`；`i_takeFault/i_runSync` 供包内执行层协作；测试通过上述 child_process 公共接口触发执行。
 
 Git 命令需要显式安装：`import { t_install } from 'litenvi-node/lite-cmd-git.mjs'; t_install();`。仅导入模块不会登记 Git，也不会创建 Git 命令文件；未安装时内存子进程执行 Git 返回 `ENOENT`。`t_install()` 可在建立内存卷之前或之后调用：卷尚未建立时先登记，执行命令时由管理器安装命令文件；系统卷已存在时立即补齐 Git 文件。重复调用保持幂等，保留已配置的脚本钩子和故障规则。
 
@@ -174,7 +182,7 @@ timer.t_unmock();
 方法按用途分为四类：
 
 - `f_`：文件私有，不导出。
-- `pkg_`：仅供同一包内模块协作。
+- `i_`：仅供同一包内模块协作。
 - `t_`：测试专用，只允许测试代码及其夹具引用或调用；生产代码不得导入、读取、转存或调用。
 - 无前缀：公共运行接口，生产代码与测试均可使用。
 
@@ -182,8 +190,8 @@ timer.t_unmock();
 
 当前通过命名和方法注释表达访问约定，暂未增加 ESLint 或运行时访问限制。
 
-`mgr.pkg_defineCommand/pkg_resolve`、命令条目的 `pkg_takeFault/pkg_runSync`、`liteProcess` 模块的 `pkg_commandContext`、`liteChildProcess.pkg_signal`、`liteServer.pkg_handle` 为内部接口。`lite-cmd-node/-os` 的命令表和 Node 路径常量以 `pkg_` 导出；`lite-cmd-git` 与 `lite-cmd-eslint` 导出测试专用的 `t_install()`，仅显式调用后安装命令，不导出原始命令条目。`f_installArgv`、`f_liveRequests` 与 exec/shell 辅助方法保持文件内私有。
+`mgr.i_defineCommand/i_resolve`、命令条目的 `i_takeFault/i_runSync`、`liteProcess` 模块的 `i_commandContext`、`liteChildProcess.i_signal` 与 `i-http-transport.mjs` 的所有 `i_` 接口为内部接口。HTTP 服务路由由服务端向 transport 登记，客户端和 socket 前端通过同一管线分派。`lite-cmd-node/-os` 的命令表和 Node 路径常量以 `i_` 导出；`lite-cmd-git` 与 `lite-cmd-eslint` 导出测试专用的 `t_install()`，仅显式调用后安装命令，不导出原始命令条目。`f_installArgv`、`f_liveRequests` 与 exec/shell 辅助方法保持文件内私有。
 
-`t_mock()` 返回公共门面，私有运行态不作为返回值暴露。`isMocked()` 是公开的状态查询；`liteFs.markPersistent()` 是公开的持久目录配置，均允许测试使用。命令实现（含 `t_defineUserCommand` 的实现对象）统一声明 `pkg_run/pkg_runSync`，仅供包内执行层分派，不保留 `run/runSync` 别名。外部调用方应使用 `child_process` 的 `spawn/spawnSync`、`exec/execSync` 或 `execFile/execFileSync` 执行命令；`mgr.command(...)` 同时供包内执行层查询命令；测试通过该句柄配置 `t_inject/t_onRun`。
+`t_mock()` 返回公共门面，私有运行态不作为返回值暴露。`isMocked()` 是公开的状态查询；`liteFs.markPersistent()` 是公开的持久目录配置，均允许测试使用。命令实现（含 `t_defineUserCommand` 的实现对象）统一声明 `i_run/i_runSync`，仅供包内执行层分派，不保留 `run/runSync` 别名。外部调用方应使用 `child_process` 的 `spawn/spawnSync`、`exec/execSync` 或 `execFile/execFileSync` 执行命令；`mgr.command(...)` 同时供包内执行层查询命令；测试通过该句柄配置 `t_inject/t_onRun`。
 
 `lite-cmd-mgr` 的 `f_install()` 仅在本文件内使用，不挂到默认导出对象；命令文件由公共执行入口触发惰性安装，测试不直接调用安装方法。
