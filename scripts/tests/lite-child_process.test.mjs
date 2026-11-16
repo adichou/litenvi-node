@@ -39,10 +39,10 @@ test('异步故障统一调度：Git/npm/node/OS 与用户命令等待同一 wai
     const removers = [];
     let builtinRuns = 0;
     try {
-      mgr.t_defineUserCommand('wait-sync-only', { i_runSync() { builtinRuns += 1; return { status: 0 }; } });
+      mgr.t_defineUserCommand('wait-sync-only', { i_runSync: () => { builtinRuns += 1; return { status: 0 }; } });
       mgr.t_defineUserCommand('wait-async-only', { i_run() { builtinRuns += 1; } });
       mgr.t_defineUserCommand('wait-both', {
-        i_run() { builtinRuns += 1; }, i_runSync() { builtinRuns += 1; return { status: 0 }; },
+        i_run() { builtinRuns += 1; }, i_runSync: () => { builtinRuns += 1; return { status: 0 }; },
       });
       const gate = new Promise((resolve, reject) => { complete = outcome === 'reject' ? reject : resolve; });
       const exit = outcome === 'wait-only' ? undefined : 7;
@@ -89,7 +89,7 @@ test('同步回落：once 消费、钩子保留、kill 与卸载后丢弃迟到�
     // 输入：只实现 runSync 的命令安装钩子，连续排入两个一次性故障
     let builtinRuns = 0, hookRuns = 0;
     const entry = mgr.t_defineUserCommand('sync-fallback', {
-      i_runSync() { builtinRuns += 1; return { status: 0, stdout: 'builtin\n' }; },
+      i_runSync: () => { builtinRuns += 1; return { status: 0, stdout: 'builtin\n' }; },
     });
     entry.t_onRun((_call, runBuiltin) => { hookRuns += 1; return { ...runBuiltin(), stdout: 'hooked\n' }; });
     const gate = new Promise(resolve => { release = resolve; });
@@ -682,7 +682,7 @@ test('暂停后的完成：同步回落与异步命令均在 SIGCONT 后输出�
     mgr.t_defineUserCommand('paused-completion', {
       i_run(_args, _ctx, child) { queueMicrotask(() => { child.stdout.write('done\n'); child.emit('exit', 0, null); child.emit('close', 0, null); }); },
     });
-    mgr.t_defineUserCommand('paused-sync-completion', { i_runSync() { return { status: 0, stdout: 'done\n' }; } });
+    mgr.t_defineUserCommand('paused-sync-completion', { i_runSync: () => { return { status: 0, stdout: 'done\n' }; } });
     for (const command of ['paused-sync-completion', 'paused-completion']) {
       const child = liteChildProcess.spawn(command);
       const events = [];

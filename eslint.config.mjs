@@ -13,11 +13,13 @@
 //   （固定睡眠属内在真实时序：timer 透传真实定时器、server 真实 socket 观察窗、
 //   child_process 真实 timeout 负空间、browser-timer gate 真实时间窗、native-reference
 //   真实子进程信号/盘上时序观察窗）
-// - packageJson: { parser: eslint-plugin-package-json 的 recommended parser,
-//   localWhitelist: [{ name: 'atb-eslint-plugin', spec: 'file:../atb-eslint-plugin' }] }
-//   （本仓唯一本地来源：atb-eslint-plugin 平级仓库，file: 目标存在性由规则核验）
+import pluginPackageJson from 'eslint-plugin-package-json';
 import { createConfig } from 'atb-eslint-plugin/config.mjs';
 
 export default createConfig({
   root: import.meta.dirname,
+  // package.json 清单面（JSON parser 自备依赖）：未使用运行时依赖 + 入口面指向核验 + dist-tag
+  // 禁令；本地来源（file: 的 atb-eslint-plugin 平级仓）不检——开发分支联调形态，main 分支
+  // 守护归交付流程（看板 REQ-20261116-003）。
+  packageJson: { parser: pluginPackageJson.configs.recommended.languageOptions.parser },
 });

@@ -1,6 +1,6 @@
 // HTTP 门面测试共用的请求夹具；仅提供辅助函数，不注册用例。
 /** URL 注入请求夹具：公开 request 接口，超时销毁请求以保证失败用例能收尾。 */
-export function _urlInjectionRequest(client, options) {
+export function t_urlInjectionRequest(client, options) {
   return new Promise((resolve, reject) => {
     const req = client.request(options, res => {
       let body = '';

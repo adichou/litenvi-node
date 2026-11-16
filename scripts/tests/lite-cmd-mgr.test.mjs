@@ -16,7 +16,6 @@ import { t_install as t_installNodeCommands } from '../lite-cmd-node.mjs';
 import { t_install as t_installOsCommands } from '../lite-cmd-os.mjs';
 t_installNodeCommands();
 t_installOsCommands();
-import { liteProcess } from '../lite-process.mjs';
 import liteHttp from '../lite-http.mjs';
 import liteServer from '../lite-server.mjs';
 
@@ -34,7 +33,7 @@ const tstImpl = {
             child.emit('close', 0, null);
         });
     },
-    i_runSync() { return { status: 0, stdout: 'tst-ok\n', stderr: '' }; },
+    i_runSync: () => { return { status: 0, stdout: 'tst-ok\n', stderr: '' }; },
 };
 
 // 逐用例装配：内存卷 + spawn 边界（命令执行寻址须卷内 /mock-cmd 系统卷——惰性安装覆盖）
@@ -136,7 +135,7 @@ test('inject 支持命令定义的检查点', () => {
         callback = observer;
         return () => { callback = undefined; };
       },
-      i_runSync() { callback?.({ stage: 'execute' }); return { status: 0, stdout: '', stderr: '' }; },
+      i_runSync: () => { callback?.({ stage: 'execute' }); return { status: 0, stdout: '', stderr: '' }; },
     });
     const events = [];
     const remove = entry.t_inject({ checkpoint: 'execute', once: true, onHit: event => events.push(event.stage) });
@@ -170,7 +169,7 @@ test('命令执行协议：仅保留 i_run/i_runSync，经子进程公共入口�
         child.emit('exit', 0, null);
         child.emit('close', 0, null);
       },
-      i_runSync() { return { status: 0, stdout: 'sync-package\n' }; },
+      i_runSync: () => { return { status: 0, stdout: 'sync-package\n' }; },
     });
     assert.equal(liteChildProcess.spawnSync('package-execution', [], { encoding: 'utf8' }).stdout, 'sync-package\n', '同步公共入口应分派包内实现');
     const child = liteChildProcess.spawn('package-execution');
@@ -187,7 +186,7 @@ test('故障领取：once 在闸门等待前消费，持续故障保留至移除
   let release;
   try {
     // 输入：排入一次性等待与持续故障，通过 spawn 触发，不调用内部领取方法
-    const entry = mgr.t_defineUserCommand('take-fault-probe', { i_runSync() { return { status: 0 }; } });
+    const entry = mgr.t_defineUserCommand('take-fault-probe', { i_runSync: () => { return { status: 0 }; } });
     const gate = new Promise(resolve => { release = resolve; });
     const removeOnce = entry.t_inject({ wait: gate, exit: 4, once: true });
     const removePersistent = entry.t_inject({ exit: 5 });
@@ -264,7 +263,7 @@ test('PATH 解析：用户命令优先，绝对路径映射与命名空间路径
     // 输入：先观察系统 echo，再登记同名用户命令
     const run = command => liteChildProcess.spawnSync(command, ['probe'], { encoding: 'utf8' });
     assert.equal(run('echo').stdout, 'probe\n', '裸名应找到系统命令');
-    mgr.t_defineUserCommand('echo', { i_runSync() { return { status: 0, stdout: 'user-first\n' }; } });
+    mgr.t_defineUserCommand('echo', { i_runSync: () => { return { status: 0, stdout: 'user-first\n' }; } });
     // 预期：裸名命中用户命令，显式系统路径仍运行系统实现
     assert.equal(run('echo').stdout, 'user-first\n', '用户命令应优先');
     assert.equal(run('/bin/echo').stdout, 'probe\n', '绝对路径应映射到系统卷');

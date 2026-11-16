@@ -77,44 +77,9 @@ try {
 
 内存 Git 支持 `git rm [-q] [-r] -- <路径>`：删除已跟踪文件并暂存删除；有未提交修改时拒绝删除，目录须指定 `-r`，其他选项明确报错。`git add` 对工作树和暂存区均无匹配项的路径返回错误；已暂存删除可由 `git commit --only -- <路径>` 收录。提交内容可经 `git show HEAD:<路径>` 等命令核验。
 
-ESLint 命令集同样需要显式安装：`import { t_install } from 'litenvi-node/lite-cmd-eslint.mjs'; t_install();`。仅导入模块不会登记 ESLint，未安装时内存子进程执行 eslint 返回 `ENOENT`。安装时序与幂等语义与 Git 相同：卷建立前后皆可调用，重复调用保留已配置的脚本钩子和故障规则。ESLint 无子命令，`mgr.command('eslint').t_inject({ exit, stderr, once })` 匹配该命令的全部调用；与 Git 不同，ESLint 不提供检查点注入。
+ESLint 规则与配置直接使用官方 API 测试：单条规则使用 `RuleTester`，配置工厂的实际效果使用 `Linter.verify()` 或 `ESLint.lintText()`，需要验证真实配置加载与命令行行为时运行真实 ESLint。规则需要扫描项目数据时，继续显式使用 lite-fs 准备内存文件；无需模拟 ESLint 命令或生成临时配置模块。
 
-ESLint 委托宿主安装的真实 `Linter` 执行规则，受检文件和目录通过 lite-fs 读取，`verify(text, configs, { filename })` 保留真实配置匹配、AST visitor、schema 校验、内联指令与诊断。配置为真实排除目录中的 `eslint.config.mjs`，可从 cwd 向上查找，或用 `--config <真实路径>` 指定；默认导出须为 flat config 数组。
-
-配置与规则由 `await import()` 原生加载，不改写 import/export，不使用 eval/new Function，也不替换 `node:fs`。多行 import、具名再导出、顶层 await、动态绑定、import.meta 与模块身份由 Node 处理，覆盖率直接归属原始源码。配置按 mtime 查询参数重新加载，依赖保留 Node 原生缓存；规则模块状态不会随内存卷重置。自研规则访问运行数据应显式导入 lite-fs，第三方插件只验证消费侧配置与真实接线。字符串插件路径作为兼容输入仍支持，但也必须指向真实源码模块；文本 report 顶层 line/column 简写仍转换为标准 loc。
-
-通过 `spawn`／`execFile` 异步执行，`spawnSync` 返回退出码 2 并提示改用异步入口。命令钩子的 `runBuiltin()` 现在返回 Promise；通用故障仍由子进程门面处理。CLI 支持 `--config`、`--format stylish|json`、`--ext`、`--max-warnings` 和显式目标；`--ext` 与配置推导扩展名取并集，目录跳过点目录和 node_modules，忽略文件在读取前跳过。0=干净，1=规则错误或超过警告阈值，2=配置／执行错误；stylish 排版与 JSON 字段为近似子集。完整路径 glob、--fix、stdin lint 和处理器不在支持范围。
-
-下面先准备真实配置源码，再将受检文件放入内存卷；收尾清理两侧资源：
-
-```js
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { t_install } from 'litenvi-node/lite-cmd-eslint.mjs';
-import liteFs from 'litenvi-node/lite-fs.mjs';
-import liteChildProcess from 'litenvi-node/lite-child_process.mjs';
-
-const sourceRoot = mkdtempSync(path.join(tmpdir(), 'eslint-source-'));
-try {
-  const config = path.join(sourceRoot, 'eslint.config.mjs');
-  writeFileSync(config, "export default [{ rules: { 'no-debugger': 'error' } }];\n");
-  t_install();
-  liteFs.t_mock({ exclude: [sourceRoot] });
-  liteChildProcess.t_mock();
-  liteFs.mkdirSync('/mock/app/src', { recursive: true });
-  liteFs.writeFileSync('/mock/app/src/bad.js', 'debugger;\n');
-  const child = liteChildProcess.spawn('eslint', ['src', '--config', config, '--format', 'json'], { cwd: '/mock/app' });
-  let stdout = '';
-  child.stdout.on('data', chunk => { stdout += chunk; });
-  const result = await liteChildProcess.waitForClose(child);
-  console.log(result.code, stdout); // 退出 1，诊断来自真实 no-debugger 规则。
-} finally {
-  liteChildProcess.t_unmock();
-  liteFs.t_unmock();
-  rmSync(sourceRoot, { recursive: true, force: true });
-}
-```
+仓库自身的 `npm run lint` 仍使用真实 ESLint 开发依赖。内存子进程只执行已登记的命令；不会把未登记命令自动转交给宿主。
 
 ## 验证
 
@@ -190,7 +155,7 @@ timer.t_unmock();
 
 当前通过命名和方法注释表达访问约定，暂未增加 ESLint 或运行时访问限制。
 
-`mgr.i_defineCommand/i_resolve`、命令条目的 `i_takeFault/i_runSync`、`liteProcess` 模块的 `i_commandContext`、`liteChildProcess.i_signal` 与 `i-http-transport.mjs` 的所有 `i_` 接口为内部接口。HTTP 服务路由由服务端向 transport 登记，客户端和 socket 前端通过同一管线分派。`lite-cmd-node/-os` 的命令表和 Node 路径常量以 `i_` 导出；`lite-cmd-git` 与 `lite-cmd-eslint` 导出测试专用的 `t_install()`，仅显式调用后安装命令，不导出原始命令条目。`f_installArgv`、`f_liveRequests` 与 exec/shell 辅助方法保持文件内私有。
+`mgr.i_defineCommand/i_resolve`、命令条目的 `i_takeFault/i_runSync`、`liteProcess` 模块的 `i_commandContext`、`liteChildProcess.i_signal` 与 `i-http-transport.mjs` 的所有 `i_` 接口为内部接口。HTTP 服务路由由服务端向 transport 登记，客户端和 socket 前端通过同一管线分派。`lite-cmd-node/-os` 的命令表和 Node 路径常量以 `i_` 导出；`lite-cmd-git` 导出测试专用的 `t_install()`，仅显式调用后安装命令，不导出原始命令条目。`f_installArgv`、`f_liveRequests` 与 exec/shell 辅助方法保持文件内私有。
 
 `t_mock()` 返回公共门面，私有运行态不作为返回值暴露。`isMocked()` 是公开的状态查询；`liteFs.markPersistent()` 是公开的持久目录配置，均允许测试使用。命令实现（含 `t_defineUserCommand` 的实现对象）统一声明 `i_run/i_runSync`，仅供包内执行层分派，不保留 `run/runSync` 别名。外部调用方应使用 `child_process` 的 `spawn/spawnSync`、`exec/execSync` 或 `execFile/execFileSync` 执行命令；`mgr.command(...)` 同时供包内执行层查询命令；测试通过该句柄配置 `t_inject/t_onRun`。
 

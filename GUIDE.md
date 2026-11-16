@@ -11,7 +11,7 @@
 |---|---|---|
 | `lite-fs` | `node:fs` | 黑名单制内存卷（exclude 外全部内存化，越界写不穿透真实磁盘） |
 | `lite-child_process` | `node:child_process` | 内存命令分派（node/npm/git/系统命令），不启动 OS 子进程 |
-| `lite-cmd-git` / `lite-cmd-eslint` | —（命令集） | 内存 Git / 委托宿主 ESLint Linter 的内存 ESLint |
+| `lite-cmd-git` | —（命令集） | 内存 Git |
 | `lite-cmd-mgr` | —（命令内核） | 命令登记表与故障注入，无开关 |
 | `lite-process` | `process` | cwd/argv/env/pid 假世界，`exit()` 记录退出意图 |
 | `lite-os` | `node:os` | homedir/tmpdir 等路径锚点与只读标识按键覆盖 |
@@ -172,7 +172,7 @@ try {
 }
 ```
 
-故障口径：`exit` 须为 ≥1 整数（不允许「成功回包替换」），或 `wait` Promise 闸门（命中后挂起、放行再回失败包）；`once` 完整命中才消耗；Git 可按 `subcommand` 匹配，ESLint 无子命令。`t_inject` 返回移除函数，用完必须调用。
+故障口径：`exit` 须为 ≥1 整数（不允许「成功回包替换」），或 `wait` Promise 闸门（命中后挂起、放行再回失败包）；`once` 完整命中才消耗；Git 可按 `subcommand` 匹配。`t_inject` 返回移除函数，用完必须调用。
 
 ## 6. 自定义命令
 
@@ -329,49 +329,27 @@ try {
 }
 ```
 
-## 10. 内存 ESLint
+## 10. ESLint 规则与配置测试
 
-ESLint 命令集同样须显式 `t_install()`。它委托**宿主安装的真实 `Linter`** 执行规则：配置与规则放真实源码目录（`exclude`，flat config 数组），受检文件留内存卷；诊断、schema 校验、内联指令都来自真实引擎，覆盖率直接归属原始源码。
+单条自研规则使用 ESLint 官方 `RuleTester` 验证合法与违规代码；配置工厂则将真实产出的配置传给 `Linter.verify()` 或 `ESLint.lintText()`，检查文件范围、选项与规则是否实际生效。受检文本可以直接传字符串，不必创建配置夹具或模拟命令。
+
+下面的示例使用仓库已有的 ESLint 开发依赖，直接检查字符串：
 
 ```js
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { t_install } from 'litenvi-node/lite-cmd-eslint.mjs';
-import liteFs from 'litenvi-node/lite-fs.mjs';
-import liteChildProcess from 'litenvi-node/lite-child_process.mjs';
+import { Linter } from 'eslint';
 
-// 配置与规则在真实源码目录（exclude），受检文件留在内存卷
-const sourceRoot = mkdtempSync(path.join(tmpdir(), 'eslint-source-'));
-const config = path.join(sourceRoot, 'eslint.config.mjs');
-writeFileSync(config, "export default [{ rules: { 'no-debugger': 'error' } }];\n");
-
-t_install(); // ESLint 与 Git 一样必须显式安装
-liteFs.t_unmock();
-liteChildProcess.t_unmock();
-liteFs.t_mock({ exclude: [sourceRoot] });
-liteChildProcess.t_mock();
-try {
-  liteFs.mkdirSync('/mock/app/src', { recursive: true });
-  liteFs.writeFileSync('/mock/app/src/bad.js', 'debugger;\n');
-
-  const child = liteChildProcess.spawn('eslint', ['src', '--config', config, '--format', 'json'], { cwd: '/mock/app' });
-  let stdout = '';
-  child.stdout.on('data', chunk => { stdout += chunk; });
-  assert.deepEqual(await liteChildProcess.waitForClose(child), { code: 1, signal: null }, '规则命中应退出 1');
-
-  const [report] = JSON.parse(stdout);
-  assert.equal(report.filePath, '/mock/app/src/bad.js', '受检文件应取自内存卷');
-  assert.equal(report.messages[0].ruleId, 'no-debugger', '诊断应来自真实宿主规则');
-} finally {
-  liteChildProcess.t_unmock();
-  liteFs.t_unmock();
-  rmSync(sourceRoot, { recursive: true, force: true });
-}
+const linter = new Linter();
+const config = [{ rules: { 'no-debugger': 'error' } }];
+const filename = path.resolve('scripts/example.mjs');
+const messages = linter.verify('debugger;\n', config, { filename });
+assert.equal(messages.length, 1, '违规样例应产生一条诊断');
+assert.equal(messages[0].ruleId, 'no-debugger', '应执行真实 ESLint 规则');
+assert.deepEqual(linter.verify('console.log(1);\n', config, { filename }), [], '合法样例应放行');
 ```
 
-退出码：0=干净，1=规则错误或超过 `--max-warnings` 阈值，2=配置/执行错误；ESLint 只支持异步执行（spawn/execFile）。
+规则需要读取项目文件时，用 lite-fs 装配数据并在测试结束后复位。配置文件加载与 CLI 退出码使用少量真实集成测试验证；项目的 `npm run lint` 仍直接运行真实 ESLint。
 
 ## 11. 完整测试用例模板
 
@@ -480,7 +458,7 @@ try {
 
 ## 14. 常见坑速查
 
-- **Git / ESLint 忘了 `t_install()`** → 执行返回 `ENOENT`。
+- **Git 忘了 `t_install()`** → 执行返回 `ENOENT`。
 - **`liteFs.t_mock()` 不传 `exclude`** → 直接报错：必须声明非空黑名单（系统本体留在真实 fs）。
 - **`spawnSync('node', 脚本)`** → 明确失败：node 脚本只有异步执行面，用 `spawn` + `waitForClose`。
 - **漏了 `try/finally` 归位** → 门面单例状态泄漏到后续用例；起手 `t_unmock()` 复位。

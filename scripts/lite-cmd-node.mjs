@@ -161,7 +161,7 @@ function f_installBoundaries() {
 }
 
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_invocation(argv, ctx) {
+const f_invocation = (argv, ctx) => {
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         if (arg === '-v' || arg === '--version') return { kind: 'version' };
@@ -176,12 +176,12 @@ function f_invocation(argv, ctx) {
         return { kind: 'file', file: path.resolve(ctx.cwd(), arg), args: argv.slice(i + 1) };
     }
     return { kind: 'stdin', args: [] };
-}
+};
 
 // 私有：解析已支持的测试运行参数；未知选项明确报错，不退回普通脚本执行。
 // 覆盖率范围旗标（--test-coverage-include/--test-coverage-exclude）只入运行器选项、不入
 // execArgv——它们是 node:test 的报告过滤项，不是 Node 进程选项（与原生命令的归类一致）。
-function f_testInvocation(argv, ctx) {
+const f_testInvocation = (argv, ctx) => {
     const files = [], execArgv = [], coverageInclude = [], coverageExclude = [];
     let coverage = false, literal = false;
     for (let i = 0; i < argv.length; i++) {
@@ -212,7 +212,7 @@ function f_testInvocation(argv, ctx) {
     }
     if (!files.length) throw new Error('lite-cmd-node：--test 需要显式指定测试文件');
     return { kind: 'test', files, execArgv, coverage, coverageInclude, coverageExclude };
-}
+};
 
 // 私有：完整函数作为 Worker 入口，依赖只在独立上下文内加载，不修改宿主测试注册表。
 async function f_runTestWorker() {
@@ -466,7 +466,7 @@ const f_nodeImpl = {
         else f_runNode(plan, ctx, child);
     },
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    i_runSync(argv, ctx) {
+    i_runSync: (argv, ctx) => {
         if (f_invocation(argv, ctx).kind === 'version') return { status: 0, stdout: `${process.version}\n`, stderr: '' };
         return { status: 1, stdout: '', stderr: 'lite-cmd-node：node 入口的同步执行未实现（import 是异步的），请改用 spawn\n' };
     },
@@ -547,7 +547,7 @@ export function t_install() {
 }
 
 // 私有：npm 非异步面统一结果——版本探测、别名未实现与未实现参数的明确报错。
-function f_npmSyncResult(argv, ctx) {
+const f_npmSyncResult = (argv, ctx) => {
     if (argv[0] === '-v' || argv[0] === '--version') return { status: 0, stdout: `${f_npmVersion}\n`, stderr: '' };
     if (argv.includes('--versions') && argv.every(arg => ['--versions', '--json'].includes(arg))) {
         const output = argv.includes('--json') ? JSON.stringify(f_npmVersions, null, 2) : inspect(f_npmVersions);
@@ -571,7 +571,7 @@ function f_npmSyncResult(argv, ctx) {
     if (['test', 'start', 'stop', 'restart'].includes(argv[0]))
         return { status: 1, stdout: '', stderr: 'lite-cmd-node：npm test/start 等别名未实现（pre/post 生命周期钩子未实现，请用 npm run <script>）\n' };
     return { status: 1, stdout: '', stderr: 'lite-cmd-node：npm 该参数未实现内存语义\n' };
-}
+};
 
 // 私有：自 cwd 逐级向上找最近的 package.json；找不到返回 null（不落真实磁盘回退）。
 function f_findPackageJson(cwd) {
@@ -586,7 +586,7 @@ function f_findPackageJson(cwd) {
 }
 
 // 私有：解析 npm run 计划；失败返回 { error, exit }，成功返回 { script, name, version, tokens, commandLine }。
-function f_npmRunPlan(argv, ctx) {
+const f_npmRunPlan = (argv, ctx) => {
     const name = argv[0];
     if (!name) return { error: 'lite-cmd-node：npm run 需要 <script> 名（无参列出脚本未实现）\n', exit: 1 };
     const divider = argv.indexOf('--');
@@ -616,7 +616,7 @@ function f_npmRunPlan(argv, ctx) {
         tokens: [...tokens, ...extra],
         commandLine: extra.length ? `${script} ${extra.join(' ')}` : script,
     };
-}
+};
 
 // 私有：npm run 的 banner（模拟口径统一记 stdout；真实 npm 的落点随版本有差异，以头注释声明为准）。
 function f_npmBanner(plan) {

@@ -15,14 +15,14 @@ import https from 'node:https';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { urlToHttpOptions } from 'node:url';
-import { i_requestContext, i_openClient, i_closeClient } from './i-http-transport.mjs';
+import { i_requestContext, i_openClient, i_closeClient } from './lib/i-http-transport.mjs';
 
 // 内存 http 实现：回调式 request/get 经共用管线取得响应，适配客户端事件与流。
 // req 形状对齐真实 ClientRequest 的常用消费面（on('error')/on('response')/end/
 // destroy）；res 形状对齐 IncomingMessage（statusCode / headers / data / end 事件 + faulted
 // 标记）。
 // 私有方法：创建内存 HTTP 客户端；仅在本文件实现中使用，不导出。
-function f_createMemoryHttp() {
+const f_createMemoryHttp = () => {
     const transport = i_openClient();
 
     // 私有方法：仅在本文件实现中使用，不导出。
@@ -53,7 +53,7 @@ function f_createMemoryHttp() {
             if (body !== undefined && body !== null) chunks.push(f_bytes(body, typeof encoding === 'string' ? encoding : undefined));
             ended = req.writableEnded = true;
             queueMicrotask(() => { req.emit('finish'); (typeof encoding === 'function' ? encoding : done)?.(); });
-            const pending = transport.i_dispatch({ ...context, payload: Buffer.concat(chunks), isAborted: () => aborted });
+            const pending = transport.f_dispatch({ ...context, payload: Buffer.concat(chunks), isAborted: () => aborted });
             // 私有方法：仅在本文件实现中使用，不导出。
             function f_deliverResponse(status, headers, text, faulted = false) {
                 queueMicrotask(() => {
@@ -96,9 +96,9 @@ function f_createMemoryHttp() {
             return req;
         },
         // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-        inject(fault) { return transport.i_inject(fault); },
+        inject(fault) { return transport.f_inject(fault); },
     };
-}
+};
 
 let f_memory = null; // 未设置 → 默认实现（真实 node:http）
 

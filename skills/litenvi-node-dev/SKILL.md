@@ -22,7 +22,7 @@ description: 开发 litenvi-node 仓库本身时使用。修改 lite-* 门面源
 
 - **叶子模块**（不依赖其他 lite-*）：`lite-fs`（仅 node:fs/path）、`lite-timer`（仅 @sinonjs/fake-timers，不 install、不触碰宿主全局）、`lite-browser`（仅 playwright）、`lite-browser-timer`（零依赖）。
 - **HTTP 管线**：`lite-http` 与 `lite-server` 均依赖包内 `i-http-transport.mjs`，不互相导入。transport 只提供 `i_` 接口，处理请求上下文、传输层故障与服务路由分派，不依赖两个门面。客户端事件与流归 `lite-http`，监听、handler、响应阶段故障和 socket 回写归 `lite-server`。客户端配置与服务路由各自随所属门面开闭，不能互相清除；测试经门面验证，不直接调用 transport。
-- **命令体系**：`lite-cmd-mgr` 维护「完整路径 → impl」注册表，在 lite-fs 内存卷内维护 `/mock-cmd` 系统卷（导入即 `markPersistent`，跨卷复位存活）；mgr 不自动加载命令集——`lite-cmd-node` / `lite-cmd-os` / `lite-cmd-git` / `lite-cmd-eslint` 一律须测试显式 `t_install()`（导入不登记）。`lite-cmd-eslint` 运行时依赖宿主安装的 eslint 包（Linter 类纯内存委托，同 lite-browser 直接使用 playwright 的先例），发布面不含该依赖。
+- **命令体系**：`lite-cmd-mgr` 维护「完整路径 → impl」注册表，在 lite-fs 内存卷内维护 `/mock-cmd` 系统卷（导入即 `markPersistent`，跨卷复位存活）；mgr 不自动加载命令集——`lite-cmd-node` / `lite-cmd-os` / `lite-cmd-git` 一律须测试显式 `t_install()`（导入不登记）。ESLint 规则与配置通过官方 API 测试，真实 ESLint 仅作为开发依赖用于仓库静态扫描与集成验证。
 - **执行面**：`lite-child_process` 是 spawn/exec/execFile 门面，mock 后经 mgr 解析分派内存命令；分派前经 `mgr.i_runAsCurrent` 进入当前执行环境（`i_currentArgv` 供 `lite-process.argv` 读取，带参数文法的命令如 node 解析后经 `i_setCurrentArgv` 细化视图）；进程能力（cwd/env/argv/recordExit/setCwd）由 `lite-process.i_commandContext` 构建并经 ctx 传入（假世界 execPath 经 mgr 寻址 node 命令条目的通用 `execPath` 接口），命令集不依赖 lite-process。
 - **虚拟 Node 脚本**（lite-cmd-node）：脚本普通 import 在宿主内执行，AsyncLocalStorage 提供虚拟命令上下文；spawn 输入经 lite-fs `i_stageStdin` 暂存为 fd 0，脚本显式用 `liteFs.readFileSync(0)` 读取。不再包装原生 fs 方法或同步改写其 ESM 具名导出；入口的业务文件访问须显式使用 lite-fs，命令参数、输入输出、退出和信号等契约继续保留。
 
@@ -59,7 +59,7 @@ description: 开发 litenvi-node 仓库本身时使用。修改 lite-* 门面源
 ### 新增 / 修改内存命令
 
 - 命令实现协议：`impl = { i_run(argv, ctx, child)?, i_runSync(argv, ctx)? }`——`i_run` 服务异步 spawn（驱动子进程事件面），`i_runSync` 服务 spawnSync（返回同步结果对象面）。
-- 登记：系统级经 `mgr.i_defineCommand(path, impl)`（node / os / git / eslint 命令集一律由各自模块的 `t_install()` 显式安装，mgr 不自动加载）；用户级临时命令走 `t_defineUserCommand(name, impl)` 落 `/mock/bin`（PATH 序在系统命令之前，可遮蔽；须先 mock lite-fs，卷复位即清）。
+- 登记：系统级经 `mgr.i_defineCommand(path, impl)`（node / os / git 命令集一律由各自模块的 `t_install()` 显式安装，mgr 不自动加载）；用户级临时命令走 `t_defineUserCommand(name, impl)` 落 `/mock/bin`（PATH 序在系统命令之前，可遮蔽；须先 mock lite-fs，卷复位即清）。
 - `ctx` 由 lite-child_process 派遣时传入；不要在命令模块内维护子进程账本。
 - 寻址：裸名按 PATH 序搜 `/mock-cmd/usr/local/bin` → `/mock-cmd/usr/bin` → `/mock-cmd/bin`（`/mock/bin` 用户级在前）；绝对路径按前缀映射到 `/mock-cmd` 命名空间。
 
@@ -95,7 +95,7 @@ description: 开发 litenvi-node 仓库本身时使用。修改 lite-* 门面源
 - **exec shell 支持面有限**：普通引号、初始环境变量展开、`;`/`&&`/`||`、缓冲管道、`<`/`>`/`>>`、`1>&2`/`2>&1`、局部 `cd`。命令替换、通配符、循环未实现——补语法须同步 README 能力清单与用例。
 - **fd 0 暂存**：命令输入经 `i_stageStdin` 暂存，虚拟命令显式用 `liteFs.readFileSync(0)` 同步读取，写侧 EBADF；释放时机与 `i_releaseStdin` 配对。
 - **Git 锁语义**：add/rm/commit 独占索引锁；status 简化可选锁模型（默认尝试持锁、被占继续读）。扩展其他写命令的锁语义时在头注释声明口径。
-- **ESLint 原生模块加载**：t_install 后经异步 spawn/execFile 执行，spawnSync 明确拒绝。配置与规则源码必须留真实排除目录，由 await import 加载；不改写源码、不使用 eval/new Function、不把 node:fs 自动换成 lite-fs。受检文本和自研规则的运行数据显式通过 lite-fs。配置按 mtime 重新载入，依赖保持 Node 缓存；改动依赖后不应假定内存卷重置会清除原生模块缓存。支持面、规则诊断与命令退出码在头注释和 README 中定义，覆盖率以原始文件位置验证，不能只断言文件名或栈帧。
+- **ESLint 测试边界**：自研规则使用官方 RuleTester，完整配置使用真实工厂与 Linter.verify / ESLint.lintText，真实配置加载及 CLI 行为使用集成测试。规则的项目数据通过 lite-fs 显式装配，不复刻 ESLint CLI 或为其接管原生模块加载。
 - **缩进不统一**（2/4 空格混存）：跟随所在文件，不顺手全局统一。
 - **文档先于记忆**：README 与头注释与实现三处一致才算完成；"先改代码后补文档"在本仓库算未完成。
 

@@ -992,7 +992,7 @@ test('写命令：push/worktree/cherry-pick 失败、merge/reset/revert/stash �
   const done = f_setup();
   try {
     // 输入：创建一个有根提交且未配置远端的仓库
-    const root = '/mock/write-commands';
+    const root = '/mock/t_write-commands';
     const run = f_volumeGit(root);
     run(['init', '-b', 'main']);
     f_write(root, 'a.txt', 'a\n');
@@ -1009,13 +1009,13 @@ test('写命令：push/worktree/cherry-pick 失败、merge/reset/revert/stash �
     // 预期 3：错误指出 origin 不是可访问的仓库
     assert.match(push.stderr, /fatal: 'origin' does not appear to be a git repository/, '推送应说明远端不存在');
     // 输入：尝试将当前已检出的 main 添加到另一工作树，然后移除未创建的工作树
-    const add = run(['worktree', 'add', '/mock/write-wt', 'main']);
+    const add = run(['worktree', 'add', '/mock/t_write-wt', 'main']);
     // 预期 4：同一分支已被当前工作树占用
     assert.equal(add.status, 128, '重复检出同一分支应失败');
     // 预期 5：错误文案包含工作树占用原因
     assert.match(add.stderr, /already used by worktree/, '应报告分支占用');
     // 预期 6：删除未创建的工作树失败
-    assert.equal(run(['worktree', 'remove', '--force', '/mock/write-wt']).status, 128, '移除不存在的工作树应失败');
+    assert.equal(run(['worktree', 'remove', '--force', '/mock/t_write-wt']).status, 128, '移除不存在的工作树应失败');
     // 输入：合并当前 HEAD，再次挑选同一个提交
     // 预期 7：无需合并时仍有正常提示
     assert.equal(run(['merge', '--no-ff', '-m', 'merge', sha]).stdout, 'Already up to date.\n', '已合并应输出正常提示');

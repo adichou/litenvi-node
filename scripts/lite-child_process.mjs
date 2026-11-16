@@ -73,7 +73,7 @@ function f_cwdPath(value) {
 
 // 同时支持 spawn(command, args, options) 与 spawn(command, options)。
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_spawnArguments(command, args, options = {}) {
+const f_spawnArguments = (command, args, options = {}) => {
     if (typeof command !== 'string') throw f_argumentError('file', command, 'of type string');
     if (command.includes('\0')) throw f_argumentError('file', command, null, 'must be a string without null bytes');
     if (!command) throw f_argumentError('file', command, null, 'cannot be empty');
@@ -95,7 +95,7 @@ function f_spawnArguments(command, args, options = {}) {
         command = typeof options.shell === 'string' ? options.shell : '/bin/sh';
     }
     return { command, args: args.map(String), options, cwd };
-}
+};
 
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_inputBuffer(input, encoding) {
@@ -108,7 +108,7 @@ function f_inputBuffer(input, encoding) {
 
 // exec 的缓冲、回调及 Promise 适配均为本文件私有实现。
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_normalizeExecArguments(file, args, options, callback) {
+const f_normalizeExecArguments = (file, args, options, callback) => {
     if (!Array.isArray(args)) { callback = options; options = args; args = []; }
     if (typeof options === 'function') { callback = options; options = {}; }
     options ??= {};
@@ -135,7 +135,7 @@ function f_normalizeExecArguments(file, args, options, callback) {
         }
     }
     return { file, args, options, callback };
-}
+};
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_commandText(command) {
     if (typeof command !== 'string' || command.includes('\0')) {
@@ -148,7 +148,7 @@ function f_commandText(command) {
 const f_display = (file, args) => [file, ...args].join(' ');
 
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_createExecMethods(backend) {
+const f_createExecMethods = (backend) => {
     // 私有方法：仅在本文件实现中使用，不导出。
     function f_buffered(file, args, options, callback, cmd) {
         const child = backend.spawn(file, args, { ...options, stdio: 'pipe' });
@@ -242,7 +242,7 @@ function f_createExecMethods(backend) {
             return f_sync(shell, ['-c', command], { ...options, shell: false }, command);
         },
     };
-}
+};
 
 // 与 Node 一致：promisify 返回 { stdout, stderr }，Promise.child 暴露可取消的子进程句柄。
 // 私有方法：仅在本文件实现中使用，不导出。
@@ -322,12 +322,12 @@ function f_shellParse(source, env) {
 // 私有方法：仅在本文件实现中使用，不导出。
 const f_shellBytes = value => Buffer.isBuffer(value) ? value : Buffer.from(value || '');
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_shellState(argv, ctx) {
+const f_shellState = (argv, ctx) => {
     if (argv[0] !== '-c') throw new Error('内存 shell 仅支持 -c command');
     const env = { ...(ctx.options.env ?? ctx.env) };
     const cwd = ctx.cwd();
     return { groups: f_shellParse(argv[1] || '', env), cwd, initialCwd: cwd, explicitCwd: ctx.options.cwd != null, env, stopped: false };
-}
+};
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_shellInputFor(program, state, input) {
     for (const redirect of program.redirects) {
@@ -338,7 +338,7 @@ function f_shellInputFor(program, state, input) {
     return input;
 }
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_shellRedirected(program, state, result) {
+const f_shellRedirected = (program, state, result) => {
     let stdout = f_shellBytes(result.stdout), stderr = f_shellBytes(result.stderr);
     for (const { op, fd, target } of program.redirects) {
         if (op === '>&') {
@@ -352,9 +352,9 @@ function f_shellRedirected(program, state, result) {
         }
     }
     return { ...result, stdout, stderr };
-}
+};
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_shellBuiltin(program, state) {
+const f_shellBuiltin = (program, state) => {
     const [command, ...args] = program.words;
     if (!command || command === ':' || command === 'true') return { status: 0 };
     if (command === 'false') return { status: 1 };
@@ -366,13 +366,13 @@ function f_shellBuiltin(program, state) {
         state.cwd = target;
         return { status: 0 };
     } catch { return { status: 1, stderr: `/bin/sh: cd: ${args[0]}: No such file or directory\n` }; }
-}
+};
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_shellCompletion(result, command) {
+const f_shellCompletion = (result, command) => {
     if (result.error) return { status: result.error.code === 'ENOENT' ? 127 : 126,
         stderr: `/bin/sh: ${command}: ${result.error.code === 'ENOENT' ? 'command not found' : result.error.code}\n` };
     return { ...result, status: result.signal ? 128 + (constants.signals[result.signal] || 0) : result.status };
-}
+};
 // 私有方法：仅在本文件实现中使用，不导出。
 const f_shellExecutionOptions = state => ({ env: state.env, ...((state.explicitCwd || state.cwd !== state.initialCwd) ? { cwd: state.cwd } : {}) });
 // 私有方法：仅在本文件实现中使用，不导出。
@@ -382,7 +382,7 @@ const f_shellSyntaxFailure = error => ({ status: 2, stdout: '', stderr: `/bin/sh
 
 const f_shellCommand = {
     // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-    i_runSync(argv, ctx) {
+    i_runSync: (argv, ctx) => {
         try {
             const state = f_shellState(argv, ctx), stdout = [], stderr = [];
             let status = 0;
@@ -472,7 +472,7 @@ const f_shellCommand = {
 };
 
 // 私有方法：创建内存子进程运行态；仅在本文件实现中使用，不导出。
-function f_createMemorySpawn() {
+const f_createMemorySpawn = () => {
     // 延迟到 mock 时登记，避开 mgr → 命令集 → child_process 的导入环。
     if (!mgr.command('/mock-cmd/bin/sh')) mgr.i_defineCommand('/mock-cmd/bin/sh', f_shellCommand);
     const calls = [];
@@ -481,7 +481,7 @@ function f_createMemorySpawn() {
     const states = new WeakMap();
     let disposed = false;
     // 私有方法：仅在本文件实现中使用，不导出。
-    function f_resolveCall(command, args, options, cwd, kind) {
+    const f_resolveCall = (command, args, options, cwd, kind) => {
         calls.push({ command, args: [...args], options: { ...options } });
         if (cwd !== undefined) {
             try {
@@ -493,7 +493,7 @@ function f_createMemorySpawn() {
         }
         const cmd = mgr.i_resolve(command);
         return cmd ? { cmd } : { error: f_spawnError(kind, command, args) };
-    }
+    };
     // 私有方法：仅在本文件实现中使用，不导出。
     function f_signalName(sig) {
         if (sig === 0) return 0;
@@ -688,7 +688,7 @@ function f_createMemorySpawn() {
         return child;
     }
     // 私有方法：仅在本文件实现中使用，不导出。
-    function f_spawnSync(command, args, options) {
+    const f_spawnSync = (command, args, options) => {
         let cwd;
         ({ command, args, options, cwd } = f_spawnArguments(command, args, options));
         const input = f_inputBuffer(options.input, options.encoding);
@@ -716,7 +716,7 @@ function f_createMemorySpawn() {
         const stderr = f_piped(options, 2) ? f_encode(result.stderr) : null;
         return { status: result.status ?? 0, signal: result.signal ?? null, output: [null, stdout, stderr],
             pid: nextPid++, stdout, stderr };
-    }
+    };
     return {
         spawn: f_spawn, spawnSync: f_spawnSync, calls,
         ...f_createExecMethods({ spawn: f_spawn, spawnSync: f_spawnSync, f_onDispose: (child, cleanup) => states.get(child)?.cleanups.add(cleanup) }),
@@ -740,7 +740,7 @@ function f_createMemorySpawn() {
             return child ? f_deliverSignal(child, name) : false;
         },
     };
-}
+};
 
 let f_memory = null; // 未设置 → 默认实现（原生 child_process）
 

@@ -45,7 +45,7 @@ const f_virtualNodeExecPath = () => {
 // 继承环境同口径）；显式给 env 才形成隔离对象。setCwd 仅假世界提供（真实进程 cwd 不经命令
 // 面改写——真实子进程改不了父进程 cwd）
 // 内部方法：构造命令执行上下文；仅限同一 package 内模块协作，测试通过公共入口验证。
-export function i_commandContext(options = {}) {
+export const i_commandContext = (options = {}) => {
     return {
         options,
         cwd: () => options.cwd === undefined ? liteProcess.cwd() : path.resolve(liteProcess.cwd(), options.cwd),
@@ -58,7 +58,7 @@ export function i_commandContext(options = {}) {
         installArgv: (argv) => f_installArgv(argv), // 真实世界 no-op（原生 argv 不可伪造）
         recordExit: (code) => { if (f_world) f_world.exitCodes.push(code); },
     };
-}
+};
 
 // 私有方法：安装命令上下文的 argv；仅在本文件实现中使用，不导出。
 function f_installArgv(argv) {

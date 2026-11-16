@@ -27,7 +27,7 @@ const f_openImpl = {
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
     i_run(_argv, _ctx, child) { f_emitCli(child, { status: 0 }); }, // 桌面动作：无输出，正常退出
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    i_runSync() { return { status: 0, stdout: '', stderr: '' }; },
+    i_runSync: () => { return { status: 0, stdout: '', stderr: '' }; },
 };
 const f_osCommands = {};
 f_osCommands['/mock-cmd/usr/bin/open'] = f_openImpl;
@@ -59,9 +59,9 @@ function f_errorReason(error) {
         ENOTEMPTY: 'Directory not empty' }[error.code] || error.code || '错误';
 }
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_failCli(cmd, target, reason) {
+const f_failCli = (cmd, target, reason) => {
     return { status: 1, stderr: `${cmd}: ${target}: ${reason}\n` };
-}
+};
 // 多路径命令遇到单个失败仍处理后续路径，保留全部诊断与最终失败状态。
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_eachOperand(cmd, targets, action) {
@@ -76,14 +76,14 @@ function f_eachOperand(cmd, targets, action) {
 }
 const f_fileCommands = {
     // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-    echo(argv) {
+    echo: (argv) => {
         // POSIX echo：参数按空格拼接 + 换行收尾（-n 抑制尾换行的常用形态支持）
         const noNewline = argv[0] === '-n';
         const text = (noNewline ? argv.slice(1) : argv).join(' ');
         return { status: 0, stdout: noNewline ? text : `${text}\n` };
     },
     // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-    mkdir(argv, ctx) {
+    mkdir: (argv, ctx) => {
         // 私有方法：仅在本文件实现中使用，不导出。
         const recursive = argv.some(a => /^-[pm]*p/.test(String(a)));
         const dirs = f_operandsOf(argv);
@@ -107,7 +107,7 @@ const f_fileCommands = {
         });
     },
     // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-    cp(argv, ctx) {
+    cp: (argv, ctx) => {
         // 私有方法：仅在本文件实现中使用，不导出。
         const recursive = argv.some(a => /^-[rR]/.test(String(a)));
         const [src, dst, ...extra] = f_operandsOf(argv);
@@ -131,7 +131,7 @@ const f_fileCommands = {
         return { status: 0 };
     },
     // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-    mv(argv, ctx) {
+    mv: (argv, ctx) => {
         const [src, dst, ...extra] = f_operandsOf(argv);
         if (!src || !dst || extra.length) return { status: 1, stderr: 'usage: mv source target\n' };
         let target = dst;
@@ -143,7 +143,7 @@ const f_fileCommands = {
         return { status: 0 };
     },
     // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-    cat(argv, ctx) {
+    cat: (argv, ctx) => {
         // 私有方法：仅在本文件实现中使用，不导出。
         const files = argv.filter(a => a === '-' || !String(a).startsWith('-'));
         if (!files.length) files.push('-');
@@ -162,7 +162,7 @@ const f_fileCommands = {
         return { status: stderr ? 1 : 0, stdout: Buffer.concat(chunks), stderr };
     },
     // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-    touch(argv, ctx) {
+    touch: (argv, ctx) => {
         const files = f_operandsOf(argv);
         if (!files.length) return { status: 1, stderr: 'usage: touch file ...\n' };
         return f_eachOperand('touch', files, f => {
@@ -171,7 +171,7 @@ const f_fileCommands = {
         });
     },
     // 私有实现：由本文件的公共门面或执行层分派，不单独导出。
-    test(argv, ctx) {
+    test: (argv, ctx) => {
         // 单条件口径：test -f|-d|-e path（退出码即判定，无输出）
         if (!argv.length) return { status: 1 };
         const flag = f_flagsOf(argv)[0];
@@ -221,7 +221,7 @@ for (const [name, impl] of Object.entries(f_fileCommands)) {
         },
         // 回包统一补全 spawnSync utf8 形状（实现可只回部分字段）
         // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-        i_runSync(argv, ctx) { return { status: 0, stdout: '', stderr: '', ...impl(argv, ctx) }; },
+        i_runSync: (argv, ctx) => { return { status: 0, stdout: '', stderr: '', ...impl(argv, ctx) }; },
     };
 }
 
@@ -229,7 +229,7 @@ for (const [name, impl] of Object.entries(f_fileCommands)) {
 // SIGTERM）、`kill -<SIGNAME> pid`、`kill -<num> pid`（常见号位映射）、`kill -s <SIGNAME> pid`；
 // 无此进程按真实 kill 口径 status 1 + stderr 提示
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_killRunImpl(argv) {
+const f_killRunImpl = (argv) => {
     let sig = 'SIGTERM';
     const rest = [...argv];
     const head = String(rest[0] ?? '');
@@ -247,7 +247,7 @@ function f_killRunImpl(argv) {
     if (!liteChildProcess.i_signal(pid, sig))
         return { status: 1, stdout: '', stderr: `kill: ${pid}: No such process\n` };
     return { status: 0, stdout: '', stderr: '' };
-}
+};
 f_osCommands['/mock-cmd/usr/bin/kill'] = {
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
     i_run(argv, _ctx, child) {
@@ -268,7 +268,7 @@ f_osCommands['/mock-cmd/bin/ls'] = {
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
     i_run(argv, ctx, child) { f_emitCli(child, this.i_runSync(argv, ctx)); },
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    i_runSync(argv, ctx) {
+    i_runSync: (argv, ctx) => {
         // 私有方法：仅在本文件实现中使用，不导出。
         const target = argv.find(a => typeof a === 'string' && !String(a).startsWith('-')) || '.';
         try {
@@ -298,7 +298,7 @@ const f_pwdImpl = {
         });
     },
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
-    i_runSync(_argv, ctx) { return { status: 0, stdout: `${ctx.cwd()}\n`, stderr: '' }; },
+    i_runSync: (_argv, ctx) => { return { status: 0, stdout: `${ctx.cwd()}\n`, stderr: '' }; },
 };
 f_osCommands['/mock-cmd/bin/pwd'] = f_pwdImpl;
 f_osCommands['/mock-cmd/bin/cwd'] = f_pwdImpl;
@@ -307,7 +307,7 @@ f_osCommands['/mock-cmd/bin/cwd'] = f_pwdImpl;
 // 落点经 ctx.setCwd 回写进程环境面（假世界）。假世界外 ctx.setCwd 缺席按失败收场（真实子进程
 // 改不了父进程 cwd）
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cdRunImpl(argv, ctx) {
+const f_cdRunImpl = (argv, ctx) => {
     const dir = f_operandsOf(argv)[0];
     if (!dir) return { status: 1, stdout: '', stderr: 'usage: cd directory\n' };
     if (typeof ctx.setCwd !== 'function')
@@ -319,7 +319,7 @@ function f_cdRunImpl(argv, ctx) {
         return { status: 1, stdout: '', stderr: `cd: ${dir}: No such file or directory\n` };
     ctx.setCwd(target);
     return { status: 0, stdout: '', stderr: '' };
-}
+};
 f_osCommands['/mock-cmd/bin/cd'] = {
     // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
     i_run(argv, ctx, child) { f_emitCli(child, f_cdRunImpl(argv, ctx)); },

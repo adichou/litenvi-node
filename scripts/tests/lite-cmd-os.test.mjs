@@ -8,7 +8,6 @@ import assert from 'node:assert/strict';
 import liteFs from '../lite-fs.mjs';
 import liteChildProcess from '../lite-child_process.mjs';
 import { liteProcess } from '../lite-process.mjs';
-import { ProcessExitError } from '../lite-process-exit-error.mjs';
 import mgr from '../lite-cmd-mgr.mjs';
 // 命令集自测经显式 t_install() 安装（导入不登记，mgr 不再反向加载本模块，无 TDZ 约束）；
 // kill 信号用例以 node 脚本为目标子进程，一并安装

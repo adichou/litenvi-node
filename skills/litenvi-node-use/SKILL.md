@@ -1,6 +1,6 @@
 ---
 name: litenvi-node-use
-description: 在业务项目中使用 litenvi-node 编写测试或装配测试环境时使用。涉及 import 'litenvi-node/…' 门面、t_mock/t_unmock/t_inject、内存文件系统、内存命令与内存 Git、内存 ESLint、故障注入、虚拟时钟（lite-timer / lite-browser-timer）、lite-browser Playwright 页面承载时触发。修改 litenvi-node 仓库本身时用 litenvi-node-dev。
+description: 在业务项目中使用 litenvi-node 编写测试或装配测试环境时使用。涉及 import 'litenvi-node/…' 门面、t_mock/t_unmock/t_inject、内存文件系统、内存命令与内存 Git、故障注入、虚拟时钟（lite-timer / lite-browser-timer）、lite-browser Playwright 页面承载时触发。修改 litenvi-node 仓库本身时用 litenvi-node-dev。
 ---
 
 # litenvi-node 使用指南
@@ -60,7 +60,7 @@ try {
 
 - **node/os 系统命令须显式安装**（同 Git 口径）：`import { t_install } from 'litenvi-node/lite-cmd-node.mjs'; t_install();`（node/npm）与 `import { t_install } from 'litenvi-node/lite-cmd-os.mjs'; t_install();`（open/ls/pwd/cwd/kill、mkdir/rm/cp/mv/cat/touch/test、cd/exit 内建）——仅导入不登记，执行返回 `ENOENT`；幂等。
 - **Git 须显式安装**：`import { t_install } from 'litenvi-node/lite-cmd-git.mjs'; t_install();`——仅导入不会登记，执行返回 `ENOENT`。`t_install()` 在内存卷建立前后调用皆可，幂等。
-- **ESLint 显式安装与异步加载**：调用 `t_install()` 后经 `spawn`／`execFile` 执行。`eslint.config.mjs` 与规则位于 exclude 真实源码目录，Node 原生 await import；受检文件留在内存卷。配置/自研规则需要内存数据时显式使用 lite-fs，原生 fs 不被自动替换。`spawnSync` 明确失败；真实 ESM 支持顶层 await、多行 import 和再导出，覆盖率直接归属原文件。
+- **ESLint 直接使用官方 API**：规则测试使用 RuleTester，配置测试使用真实工厂与 Linter.verify / ESLint.lintText；规则读写的项目数据通过 lite-fs 装配，不需要内存 ESLint 命令。
 - 配置入口 `mgr.command(nameOrPath)`：`t_onRun(handler)` 配置行为钩子（`(call, runBuiltin) => result`，`null` 移除）；`t_inject(fault)` 注入故障 `{ exit?, stderr?, wait?, once?, subcommand? }`，git 可按 `subcommand` 匹配（如 `{ subcommand: 'add', exit: 128, stderr: 'index.lock', once: true }`）。
 - 用户级临时命令：`mgr.t_defineUserCommand(name, impl)`（impl 含 `i_run/i_runSync`），落 `/mock/bin` 可遮蔽系统命令，须先 mock lite-fs，卷复位即清。
 
@@ -138,7 +138,7 @@ try {
 
 ## 常见坑
 
-- 忘了 `t_install()` → Git / ESLint 返回 ENOENT；忘 `try/finally` 归位 → 泄漏到后续用例。
+- 忘了 `t_install()` → Git 返回 ENOENT；忘 `try/finally` 归位 → 泄漏到后续用例。
 - `lite-fs` 黑名单制：想读真实磁盘上的 fixtures，必须放进 `t_mock({ exclude })`；exclude 目录外的写永远落内存卷。
 - 故障 `exit` 不允许为 0（不允许成功回包替换）；要"命中后放行再失败"用 `wait` Promise 闸门。
 - URL 注入查询串是精确序匹配：参数顺序不同、多一个参数都不命中——要宽松匹配改用 `path` 或 `query`。

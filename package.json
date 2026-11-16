@@ -4,7 +4,7 @@
   "description": "可切换的 Node 与浏览器环境门面：文件系统、进程、Git、HTTP、时钟和 Playwright，测试通过 lite-* 组件装配内存环境。",
   "type": "module",
   "exports": {
-    "./*": "./scripts/*"
+    "./lite-*.mjs": "./scripts/lite-*.mjs"
   },
   "files": [
     "scripts/*.mjs",
@@ -12,6 +12,7 @@
   ],
   "scripts": {
     "test": "node --test scripts/tests/*.test.mjs",
+    "pretest": "npm run lint",
     "test:coverage": "node --test --experimental-test-coverage scripts/tests/*.test.mjs",
     "lint": "eslint . --max-warnings 0"
   },

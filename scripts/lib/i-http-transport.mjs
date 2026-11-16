@@ -25,7 +25,7 @@ function f_normalizeFaultUrl(value) {
 }
 
 // 内部方法：将已归一化的客户端选项转换成两个入口共用的请求上下文。
-export function i_requestContext(config) {
+export const i_requestContext = (config) => {
     const method = String(config.method || 'GET').toUpperCase();
     const raw = String((config instanceof URL ? config.pathname + config.search : config.path) || '/');
     const port = Number(config.port) || (config.protocol === 'https:' ? 443 : 80);
@@ -35,17 +35,17 @@ export function i_requestContext(config) {
     const authority = host || `${hostname.includes(':') && !hostname.startsWith('[') ? `[${hostname}]` : hostname}:${port}`;
     const url = new URL(raw, `${config.protocol || 'http:'}//${authority}`);
     return { method, raw, port, url, hostname, headers: config.headers };
-}
+};
 
 // 私有方法：统一响应字节与头名，两个入口均遵循 HEAD/204/304 无正文语义。
-function f_response(method, { status, headers, body, faulted = false }) {
+const f_response = (method, { status, headers, body, faulted = false }) => {
     return {
         status,
         headers: Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value])),
         body: method === 'HEAD' || status === 204 || status === 304 ? Buffer.alloc(0) : Buffer.from(body),
         faulted,
     };
-}
+};
 
 // 私有方法：创建一轮客户端配置；旧请求持有旧实例，重建不会改写其故障配置。
 function f_createClient() {
@@ -58,7 +58,7 @@ function f_createClient() {
 
     return {
         // 内部方法：领取故障后异步分派，供客户端适配层和 socket 前端共用。
-        i_dispatch(context) {
+        f_dispatch(context) {
             const { method, raw, url, port, isAborted } = context;
             const at = raw.indexOf('?');
             const target = at === -1 ? raw : raw.slice(0, at);
@@ -88,7 +88,7 @@ function f_createClient() {
             });
         },
         // 内部方法：由 lite-http 的测试注入入口登记传输故障。
-        i_inject(fault) {
+        f_inject(fault) {
             const hasStatus = Number.isInteger(fault?.status) && fault.status >= 400 && fault.status <= 599;
             const hasWait = fault?.wait instanceof Promise;
             if (!hasStatus && !hasWait)
@@ -118,7 +118,7 @@ export function i_isClientMocked() { return f_client !== null; }
 // 内部方法：socket 前端使用当前客户端配置，直接取得响应，无须模拟客户端事件与流。
 export function i_dispatch(context) {
     if (!f_client) throw new Error('内存 HTTP 传输需先 liteHttp.t_mock()');
-    return f_client.i_dispatch(context);
+    return f_client.f_dispatch(context);
 }
 
 // 内部方法：服务端登记路由函数；返回的撤销函数仅清理同一轮登记。

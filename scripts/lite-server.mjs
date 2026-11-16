@@ -14,7 +14,7 @@
 // 导入（含动态 import）共享。
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
-import { i_requestContext, i_dispatch, i_registerServer, i_isClientMocked } from './i-http-transport.mjs';
+import { i_requestContext, i_dispatch, i_registerServer, i_isClientMocked } from './lib/i-http-transport.mjs';
 
 // URL 规则在登记时规范化：路径 URL 不限来源，绝对 URL 额外匹配来源；fragment 不参与 HTTP 请求。
 // 私有方法：仅在本文件实现中使用，不导出。
@@ -32,7 +32,7 @@ function f_normalizeFaultUrl(value) {
 }
 
 // 私有方法：创建内存服务端；仅在本文件实现中使用，不导出。
-function f_createMemoryServer() {
+const f_createMemoryServer = () => {
     const faults = [];
     const forwarded = []; // socket 前端观测账本：{ method, path, query, body, status, response, serverResponse }
     // 私有方法：取得活请求账本；仅在本文件实现中使用，不导出。
@@ -338,7 +338,7 @@ function f_createMemoryServer() {
             servers.clear();
         },
     };
-}
+};
 
 let f_memory = null; // 未设置 → 默认实现（真实 http.createServer）
 

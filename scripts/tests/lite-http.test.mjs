@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import liteHttp from '../lite-http.mjs';
 import liteServer from '../lite-server.mjs';
-import { _urlInjectionRequest } from './lite-http-helpers.mjs';
+import { t_urlInjectionRequest } from './lite-http-helpers.mjs';
 
 // probeHealth 形状的探活（回调式 http.request 消费门面）。
 function f_probe(port, path = '/api/health') {
@@ -146,7 +146,7 @@ test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离'
   await new Promise(resolve => server.once('listening', resolve));
   try {
     const base = `http://localhost:${server.port}`;
-    const send = (path, extra = {}) => _urlInjectionRequest(liteHttp, { hostname: 'localhost', port: server.port, path, ...extra });
+    const send = (path, extra = {}) => t_urlInjectionRequest(liteHttp, { hostname: 'localhost', port: server.port, path, ...extra });
     // 输入：规范化主机名和 fragment 的绝对 URL，同时限定 POST、旧 path/query 条件与 once
     liteHttp.t_inject({ url: new URL(`${base.toUpperCase()}/same?a=1&b=2#ignored`), method: 'POST', path: '/same', query: { a: 1 }, status: 503, once: true });
     const misses = [
@@ -173,10 +173,10 @@ test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离'
     // 输入：省略默认端口的 URL 规则，使用显式 80 端口与 fragment 的 URL 请求
     const removeHttp504 = liteHttp.t_inject({ url: 'http://EXAMPLE.test/default', status: 504 });
     // 预期 4：默认端口和主机名规范化，fragment 不参与匹配
-    assert.equal((await _urlInjectionRequest(liteHttp, new URL('http://example.test:80/default#ignored'))).status, 504, '默认端口、主机大小写和 fragment 应规范化');
+    assert.equal((await t_urlInjectionRequest(liteHttp, new URL('http://example.test:80/default#ignored'))).status, 504, '默认端口、主机大小写和 fragment 应规范化');
     const removeHttps504 = liteHttp.t_inject({ url: new URL('https://example.test/default'), status: 504 });
-    assert.equal((await _urlInjectionRequest(liteHttp, new URL('https://example.test:443/default'))).status, 504, 'HTTPS URL 对象应使用默认 443 端口匹配');
-    assert.equal((await _urlInjectionRequest(liteHttp, 'https://example.test/default')).status, 504, 'HTTPS 字符串应与 URL 对象保持一致');
+    assert.equal((await t_urlInjectionRequest(liteHttp, new URL('https://example.test:443/default'))).status, 504, 'HTTPS URL 对象应使用默认 443 端口匹配');
+    assert.equal((await t_urlInjectionRequest(liteHttp, 'https://example.test/default')).status, 504, 'HTTPS 字符串应与 URL 对象保持一致');
     // 预期 5：非法 URL 在登记时拒绝，不留给请求阶段报错
     for (const url of ['', 'relative', '//example.test/same', 'ftp://example.test/same', 1, {}])
       assert.throws(() => liteHttp.t_inject({ url, status: 503 }), /url/, '非法 URL 应在注入时拒绝');
@@ -240,7 +240,7 @@ test('https 面：未 mock 真实转发，mock 后同内存传输且注入命中
 });
 
 // 私有方法：通过公开客户端接口发送请求，同时保留取消句柄。
-function f_send(path = '/', options = {}) {
+const f_send = (path = '/', options = {}) => {
   let req;
   const response = new Promise((resolve, reject) => {
     req = liteHttp.request({ hostname: 'transport.test', port: 443, path, ...options }, res => {
@@ -252,7 +252,7 @@ function f_send(path = '/', options = {}) {
     req.end();
   });
   return { req, response };
-}
+};
 
 /** 场景：客户端复位只清传输层故障，服务登记及响应阶段故障继续有效。 */
 test('客户端复位不清服务路由与服务端故障', async () => {

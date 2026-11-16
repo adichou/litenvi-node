@@ -26,15 +26,15 @@ import path from 'node:path';
 
 // 目录树节点深拷贝：快照与恢复两侧隔离（卷内后续变更不污染快照、恢复不与快照共享引用）
 // 私有方法：复制目录树快照；仅在本文件实现中使用，不导出。
-function f_cloneNode(node) {
+const f_cloneNode = (node) => {
     return {
         dirs: new Map([...node.dirs].map(([name, child]) => [name, f_cloneNode(child)])),
         files: new Map([...node.files].map(([name, file]) => [name, { ...file, data: Buffer.from(file.data) }])),
     };
-}
+};
 
 // 私有方法：创建内存文件系统；仅在本文件实现中使用，不导出。
-function f_createMemoryFs() {
+const f_createMemoryFs = () => {
     const faults = [];
     // 私有方法：仅在本文件实现中使用，不导出。
     const f_matches = (fault, op, target) => (!fault.op || fault.op === op)
@@ -454,15 +454,15 @@ function f_createMemoryFs() {
     // 私有方法：stat 时间面与真实 fs.Stats 同构——mtime/atime/birthtime/ctime 为 Date、
     // *Ms 为数值（业务侧 st.mtime.toISOString() 等消费依赖 Date 形态）；卷内无独立访问/
     // 变更时钟，四路同源 mtimeMs（目录缺省纪元 0）。
-    function f_statTimes(mtimeMs) {
+    const f_statTimes = (mtimeMs) => {
         return {
             mtimeMs, atimeMs: mtimeMs, birthtimeMs: mtimeMs, ctimeMs: mtimeMs,
             mtime: new Date(mtimeMs), atime: new Date(mtimeMs), birthtime: new Date(mtimeMs), ctime: new Date(mtimeMs),
         };
-    }
+    };
     // 私有方法：stat 路径解析——逐段行走（符号链接中段与末段按真实语义处理），回传最终条目。
     // 与 f_readFileData 同构，但错误 syscall 按 stat/lstat 口径、末段链接按 linkOnly 决定是否解析。
-    function f_statEntry(target, linkOnly, syscall) {
+    const f_statEntry = (target, linkOnly, syscall) => {
         let names = f_split(target), node = root, links = 0;
         for (let i = 0; i < names.length; i++) {
             const name = names[i], file = node.files.get(name);
@@ -484,9 +484,9 @@ function f_createMemoryFs() {
             }
         }
         return { kind: 'dir', node };
-    }
+    };
     // 私有方法：仅在本文件实现中使用，不导出。
-    function f_stat(target, linkOnly) {
+    const f_stat = (target, linkOnly) => {
         f_guard(linkOnly ? 'lstatSync' : 'statSync', target);
         const syscall = linkOnly ? 'lstat' : 'stat';
         const hit = f_statEntry(target, linkOnly, syscall);
@@ -508,7 +508,7 @@ function f_createMemoryFs() {
             isFile: () => false, isDirectory: () => true, isSymbolicLink: () => false,
             size: 0, ...f_statTimes(0),
         };
-    }
+    };
     let fdSeq = 100;
     const fds = new Map();
     return {
@@ -548,7 +548,7 @@ function f_createMemoryFs() {
             cursor.dirs.set(name, f_cloneNode(node));
         },
     };
-}
+};
 
 let f_memory = null; // 未设置 → 默认实现（真实 node:fs 全量转发）；{ impl, list }
 
@@ -622,10 +622,9 @@ const f_scoped = (target) => {
 };
 
 // 作用域自省：路径当前是否落在真实磁盘透传域——未 mock 时全量真实；mock 后仅排除目录
-//（声明为系统本体的目录）及其子路径透传，其余走内存卷。供其他 lite 门面按同一作用域口径
-// 判定路径归属（如 lite-cmd-eslint 在原生 import 前确认配置属于真实透传域，避免发现内存
-// 文件后却加载磁盘上的同名模块）。仅查询作用域，不检查文件存在性，也不改变文件访问方式。
-// 私有：查询作用域，由门面的 i_isPassthrough 属性供包内协作，不绕过卷写边界。
+//（声明为系统本体的目录）及其子路径透传，其余走内存卷。测试通过 t_isPassthrough 查询路径
+// 归属；不检查文件存在性，不改变文件访问方式，也不绕过卷写边界。
+// 私有：查询当前文件系统作用域。
 const f_isPassthrough = (target) => {
     if (!f_memory)
         return true;
@@ -639,9 +638,7 @@ const facade = new Proxy({}, {
             return Reflect.get(fs, prop);
         if (prop === 't_mock')
             return f_mock;
-        if (prop === 'i_isPassthrough')
-            return f_isPassthrough;
-        if (prop === 't_isPassthrough') // 测试专用：透传域查询的测试协作面（i_isPassthrough 仅供包内生产协作，测试代码引用本属性）
+        if (prop === 't_isPassthrough') // 测试专用：查询路径是否位于真实透传域
             return f_isPassthrough;
         if (prop === 't_unmock')
             return f_unmock;

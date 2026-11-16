@@ -9,7 +9,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { nativeReferenceEnv } from './native-reference-env.mjs';
+import { t_nativeReferenceEnv } from './native-reference-env.mjs';
 import liteHttp from '../lite-http.mjs';
 import liteServer from '../lite-server.mjs';
 import liteBrowser from '../lite-browser.mjs';
@@ -35,7 +35,7 @@ test('独立安装：调用方已加载 @playwright/test 后仍可导入 lite-br
       const { default: browser } = await import(${JSON.stringify(new URL('../lite-browser.mjs', import.meta.url).href)});
       expect(typeof browser.open).toBe('function');
       assert.equal(process.__pw_initiator__, initiator, '浏览器模块不能再次初始化测试框架');
-    `], { encoding: 'utf8', env: nativeReferenceEnv(), timeout: 30_000 });
+    `], { encoding: 'utf8', env: t_nativeReferenceEnv(), timeout: 30_000 });
     assert.ifError(result.error, '页面加载不应报错');
     assert.equal(result.status, 0, `双份安装时导入应成功：${result.stderr}`);
   } finally { rmSync(root, { recursive: true, force: true }); }

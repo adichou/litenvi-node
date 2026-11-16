@@ -4,7 +4,7 @@
 // spawn 边界、lite-process 管进程环境面）：mgr 只维护「完整路径 → impl」注册表，并在 lite-fs
 // 内存卷内维护 /mock-cmd 系统卷（导入即 markPersistent 登记持久根——跨卷复位存活：测试世界
 // unmock+mock 重建用户数据时命令文件无须重装；lite-fs 保持零命令知识）。
-// 命令集分层（用户定稿 2026-11 调整）：mgr 不自动加载任何命令集——node/os/git/eslint 命令
+// 命令集分层（用户定稿 2026-11 调整）：mgr 不自动加载任何命令集——node/os/git 命令
 // 一律由测试显式调用所属命令集模块的 t_install() 安装，导入不登记。需要哪些系统命令由世界
 // 装配方（测试用例）显式安装决定。登记统一经 i_defineCommand(path, impl)：impl =
 // { i_run(argv, ctx, child)?, i_runSync(argv, ctx)? }——i_run 服务异步 spawn（驱动子进程事件面），
@@ -157,7 +157,7 @@ function f_createEntry(p, impl) {
         // 兼容性：既有单参钩子 (call) => … 不调 runBuiltin，行为与旧「命中即跳过内置」一致
         // 子进程异步入口已领取故障时显式传 null，避免同步回落再次消费后续故障。
         // 内部方法：供 child_process 和 lite-process 同步分派，测试不直接调用。
-        i_runSync(argv, ctx, fault = f_takeFault(faults, argv)) {
+        i_runSync: (argv, ctx, fault = f_takeFault(faults, argv)) => {
             if (fault)
                 return { status: fault.exit ?? 1, stdout: '', stderr: fault.stderr ?? '' };
             const call = { argv: [...argv], options: { ...(ctx?.options || {}) } };

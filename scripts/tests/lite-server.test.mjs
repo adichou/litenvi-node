@@ -12,7 +12,7 @@ import http from 'node:http';
 import net from 'node:net';
 import liteHttp from '../lite-http.mjs';
 import liteServer from '../lite-server.mjs';
-import { _urlInjectionRequest } from './lite-http-helpers.mjs';
+import { t_urlInjectionRequest } from './lite-http-helpers.mjs';
 
 /** 场景：多个服务实例按域名与端口隔离路由，单实例关闭不影响其余。 */
 test('多个服务按域名和端口独立路由，关闭互不影响', async () => {
@@ -28,7 +28,7 @@ test('多个服务按域名和端口独立路由，关闭互不影响', async ()
   try {
     assert.deepEqual(apple.address(), { address: 'api.example.test', family: 'virtual', port: 80 }, '虚拟服务应公开监听地址');
     assert.equal((await f_realGet(board.port, '/')).body, 'board', '真实回环请求应抵达看板');
-    assert.equal((await _urlInjectionRequest(liteHttp, { hostname: 'api.example.test', path: '/builds?x=1' })).body, 'apple:/builds?x=1', '指定域名应抵达模拟服务');
+    assert.equal((await t_urlInjectionRequest(liteHttp, { hostname: 'api.example.test', path: '/builds?x=1' })).body, 'apple:/builds?x=1', '指定域名应抵达模拟服务');
     const wrong = await new Promise(resolve => liteHttp.request({ hostname: 'other.example.test', port: 80, path: '/' }).on('error', error => resolve(error.code)).end());
     assert.equal(wrong, 'ECONNREFUSED', '其他域名不能误路由');
     await new Promise(resolve => apple.close(resolve));
@@ -50,8 +50,8 @@ test('两个回环服务及同端口不同域名的虚拟服务彼此隔离', as
   try {
     assert.equal((await f_realGet(first.port, '/')).body, 'first', '第一个回环服务应保持可达');
     assert.equal((await f_realGet(second.port, '/')).body, 'second', '第二个回环服务应保持可达');
-    assert.equal((await _urlInjectionRequest(liteHttp, { hostname: 'a.test', port: 443, path: '/' })).body, 'a', '域名 a 应路由到 a 服务');
-    assert.equal((await _urlInjectionRequest(liteHttp, { hostname: 'b.test', port: 443, path: '/' })).body, 'b', '相同端口的域名 b 应路由到 b 服务');
+    assert.equal((await t_urlInjectionRequest(liteHttp, { hostname: 'a.test', port: 443, path: '/' })).body, 'a', '域名 a 应路由到 a 服务');
+    assert.equal((await t_urlInjectionRequest(liteHttp, { hostname: 'b.test', port: 443, path: '/' })).body, 'b', '相同端口的域名 b 应路由到 b 服务');
     const duplicate = liteServer.createServer((_req, res) => res.end());
     const error = new Promise(resolve => duplicate.once('error', resolve));
     duplicate.listen({ virtual: true, host: 'A.TEST', port: 443 });
@@ -528,7 +528,7 @@ test('URL 回灌：两层故障、Host 来源、方法、查询与 once 一致',
   await f_withBoard((req, res) => res.end('handler'), async port => {
     for (const injector of [liteHttp, liteServer]) {
       for (const client of [liteHttp, http]) {
-        const send = (path, extra = {}) => _urlInjectionRequest(client, { hostname: '127.0.0.1', port, path, headers: { Host: `public.test:${port}` }, ...extra });
+        const send = (path, extra = {}) => t_urlInjectionRequest(client, { hostname: '127.0.0.1', port, path, headers: { Host: `public.test:${port}` }, ...extra });
         // 输入：socket 连接仍指向回环地址，注入 URL 使用原始 Host，并同时限定 POST 和查询串
         injector.t_inject({ url: `http://public.test:${port}/same?a=1`, method: 'POST', status: 503, once: true });
         const misses = [await send('/same?a=2', { method: 'POST' }), await send('/same?a=1'),
@@ -557,7 +557,7 @@ test('URL 闸门：两层 wait 只挂目标、未命中直通、once 放行前�
   await f_withBoard((req, res) => res.end('handler'), async port => {
     for (const injector of [liteHttp, liteServer]) {
       const gate = Promise.withResolvers();
-      const send = path => _urlInjectionRequest(http, { hostname: '127.0.0.1', port, path });
+      const send = path => t_urlInjectionRequest(http, { hostname: '127.0.0.1', port, path });
       injector.t_inject({ url: '/same?held=1', wait: gate.promise, once: true });
       let settled = false;
       // 输入：真实 socket 请求命中路径 URL 闸门，另一个查询 URL 不命中
@@ -628,7 +628,7 @@ test('包自引用 specifier 与相对导入共享同一单例', async () => {
 /** 场景：服务端复位撤销旧路由且不清客户端故障，重建后只执行新 handler。 */
 test('服务端复位撤销旧路由并保留客户端故障', async () => {
   // 输入：保留客户端配置，卸载服务端后在相同地址登记新服务。
-  const f_send = (path = '/') => _urlInjectionRequest(liteHttp, { hostname: 'transport.test', port: 443, path });
+  const f_send = (path = '/') => t_urlInjectionRequest(liteHttp, { hostname: 'transport.test', port: 443, path });
   liteHttp.t_unmock(); liteServer.t_unmock();
   liteHttp.t_mock(); liteServer.t_mock();
   let oldHandled = 0;

@@ -57,7 +57,7 @@ function f_withIndexLock(repo, optional, run) {
 const f_sha1 = (data) => crypto.createHash('sha1').update(data).digest('hex');
 
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_openRepo(root, localDir = path.join(root, '.git')) {
+const f_openRepo = (root, localDir = path.join(root, '.git')) => {
     let gitDir = localDir;
     // 主工作树没有 commondir 时显式回落 localDir（吞错显式化，no-silent-catch 口径）
     try { gitDir = path.resolve(localDir, fs.readFileSync(path.join(localDir, 'commondir'), 'utf8').trim()); } catch { gitDir = localDir; }
@@ -81,7 +81,7 @@ function f_openRepo(root, localDir = path.join(root, '.git')) {
             fs.writeFileSync(f_abs(rel), data);
         },
     };
-}
+};
 
 // 仓库发现：从 dir 逐级上溯找 .git（存在即命中）
 // 私有方法：仅在本文件实现中使用，不导出。
@@ -166,13 +166,13 @@ function f_listBranches(repo) {
 }
 
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_headState(repo) {
+const f_headState = (repo) => {
     const text = String(repo.f_readText('HEAD') || '').trim();
     const m = /^ref:\s*refs\/heads\/(.+)$/.exec(text);
     if (m) return { branch: m[1] };
     if (/^[0-9a-f]{40}$/.test(text)) return { detached: text };
     return {};
-}
+};
 
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_setHead(repo, branch) {
@@ -468,7 +468,7 @@ const f_fatal = (message) => ({ status: 128, stdout: '', stderr: `fatal: ${messa
 const f_needRepo = (repo) => (repo ? null : f_notRepo());
 
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_authorOf(config) {
+const f_authorOf = (config) => {
     const name = config.get('user.name')
         || process.env.GIT_AUTHOR_NAME
         || process.env.USER
@@ -478,7 +478,7 @@ function f_authorOf(config) {
         || process.env.GIT_AUTHOR_EMAIL
         || `${name}@mini-git.local`;
     return { name: String(name), email: String(email) };
-}
+};
 
 // init [-q] [-b <name>]：建 .git 骨架（幂等，已存在不动 HEAD）
 // 私有方法：仅在本文件实现中使用，不导出。
@@ -501,7 +501,7 @@ function f_cmdInit(cwd, args) {
 // pathspec 显式命中排除目录（passthrough）内的真实文件时按单文件直读入库（内存卷 readdir
 // 不合并真实磁盘，枚举看不到——对齐真实 git「存在即可 add」口径）
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdAdd(repo, args) {
+const f_cmdAdd = (repo, args) => {
     const paths = [];
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--') { paths.push(...args.slice(i + 1)); break; }
@@ -554,10 +554,10 @@ function f_cmdAdd(repo, args) {
     }
     if (dirty) f_writeIndex(repo, index);
     return f_ok();
-}
+};
 
 // rm [-q] [--] <paths…>：删除已跟踪且无未提交修改的文件，并将删除写入暂存区。
-function f_cmdRm(repo, args) {
+const f_cmdRm = (repo, args) => {
     const paths = [];
     let quiet = false, recursive = false, optionsEnded = false;
     for (const arg of args) {
@@ -598,11 +598,11 @@ function f_cmdRm(repo, args) {
     }
     f_writeIndex(repo, index);
     return f_ok(quiet ? '' : [...selected].map(p => `rm '${p}'\n`).join(''));
-}
+};
 
 // commit [-q] [--only] -m <subject> [--] [paths…]：生成 tree + commit 并推进当前分支
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdCommit(repo, args, config) {
+const f_cmdCommit = (repo, args, config) => {
     const messages = [];
     const paths = [];
     let quiet = false;
@@ -684,7 +684,7 @@ function f_cmdCommit(repo, args, config) {
     if (quiet) return f_ok();
     const label = h.branch || 'detached';
     return f_ok(`[${label} ${sha.slice(0, 7)}] ${message.split('\n')[0]}\n`);
-}
+};
 
 // status --porcelain [-uall] [-- <pathspec>…]：工作树 vs index vs HEAD 的 XY 码
 // 私有方法：仅在本文件实现中使用，不导出。
@@ -783,7 +783,7 @@ function f_cmdLog(repo, args) {
 //（--abbrev-ref 输出短引用名：符号 HEAD → 当前分支短名、分离态保持 'HEAD'；显式 @{upstream}
 // 查询在无 upstream 时 fatal）
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdRevParse(repo, args) {
+const f_cmdRevParse = (repo, args) => {
     const out = [];
     let verify = false;
     let quiet = false;
@@ -829,7 +829,7 @@ function f_cmdRevParse(repo, args) {
     }
     if (!out.length) return f_fatal('arg count required');
     return f_ok(`${out.join('\n')}\n`);
-}
+};
 
 // rev-list：--f_count / --max-parents=N / --topo-order / --reverse / ^ref 排除
 // 私有方法：仅在本文件实现中使用，不导出。
@@ -904,7 +904,7 @@ function f_cmdBranch(repo, args) {
 
 // 检出目标树：只更新两次提交之间变化的路径，未涉及的本地修改继续保留。
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_checkoutTree(repo, target, force = false) {
+const f_checkoutTree = (repo, target, force = false) => {
     const previous = f_headTree(repo);
     const index = f_readIndex(repo);
     const changed = [...new Set([...Object.keys(previous), ...Object.keys(target), ...(force ? Object.keys(index) : [])])]
@@ -930,7 +930,7 @@ function f_checkoutTree(repo, target, force = false) {
     }
     f_writeIndex(repo, force ? target : index);
     return f_ok();
-}
+};
 
 // switch [-q] [-c] <branch> [start]：更新工作树与暂存区后才推进 HEAD；非 quiet 输出 Switched
 // to a new branch / Switched to branch 提示（stderr，对齐真实 git switch）。
@@ -979,7 +979,7 @@ function f_cmdSwitch(repo, args) {
 
 // checkout：分支切换 / detached（提交号）/ <rev> -- <paths> 检出。
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdCheckout(repo, args) {
+const f_cmdCheckout = (repo, args) => {
     const dd = args.indexOf('--');
     if (dd >= 0) {
         // 私有方法：仅在本文件实现中使用，不导出。
@@ -1024,11 +1024,11 @@ function f_cmdCheckout(repo, args) {
     if (checked.status) return checked;
     f_setDetached(repo, sha); // 提交号 → detached HEAD
     return f_ok();
-}
+};
 
 // merge-base [--is-ancestor] <a> <b>：沿父提交关系求祖先或最佳共同祖先。
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdMergeBase(repo, args) {
+const f_cmdMergeBase = (repo, args) => {
     // 私有方法：仅在本文件实现中使用，不导出。
     const specs = args.filter(a => !a.startsWith('-'));
     if (specs.length < 2) return { status: 129, stdout: '', stderr: 'usage: git merge-base [--all] <commit> <commit>...\n' };
@@ -1048,12 +1048,12 @@ function f_cmdMergeBase(repo, args) {
         && f_collectCommits(repo, [e.sha]).some(ancestor => ancestor.sha === candidate.sha)));
     return best.length ? f_ok(`${(args.includes('--all') || args.includes('-a') ? best : best.slice(0, 1)).map(e => e.sha).join('\n')}\n`)
         : { status: 1, stdout: '', stderr: '' };
-}
+};
 
 // ls-files [--error-unmatch] [--] <p>…：index 命中；--error-unmatch 未命中 status 1 + did not
 // match 提示与 Did you forget to 'git add'? 行（对齐真实 git ls-files）。
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdLsFiles(repo, args) {
+const f_cmdLsFiles = (repo, args) => {
     let errorUnmatch = false;
     const specs = [];
     for (let i = 0; i < args.length; i++) {
@@ -1080,11 +1080,11 @@ function f_cmdLsFiles(repo, args) {
         matched.forEach((p) => hits.add(p));
     }
     return f_ok(hits.size ? `${[...hits].sort().join('\n')}\n` : '');
-}
+};
 
 // symbolic-ref [--quiet] [--short] HEAD：非符号引用默认 128，静默模式为 1。
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdSymbolicRef(repo, args) {
+const f_cmdSymbolicRef = (repo, args) => {
     // 私有方法：仅在本文件实现中使用，不导出。
     const target = args.find((a) => !a.startsWith('-'));
     const h = f_headState(repo);
@@ -1093,7 +1093,7 @@ function f_cmdSymbolicRef(repo, args) {
         return { status: quiet ? 1 : 128, stdout: '', stderr: quiet ? '' : `fatal: ref ${target || 'HEAD'} is not a symbolic ref\n` };
     }
     return f_ok(`${args.includes('--short') ? h.branch : `refs/heads/${h.branch}`}\n`);
-}
+};
 
 // show [-s] [--format=…] <rev> / show <rev>:<path>
 // 私有方法：仅在本文件实现中使用，不导出。
@@ -1158,7 +1158,7 @@ function f_cmdLsTree(repo, args) {
 // 静态边界（如实声明）：行级 LCS 与 git Myers 在等价差异形态上的切分选择可能不同——本实现
 // 面向测试夹具的确定性输入；超大文件（>100×1000 行）退化为整块替换形态（不经 LCS）。
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdDiffNoIndex(args) {
+const f_cmdDiffNoIndex = (args) => {
     const dd = args.indexOf('--');
     const before = dd >= 0 ? args.slice(0, dd) : args;
     const operands = (dd >= 0 ? args.slice(dd + 1) : args).filter((a) => !a.startsWith('-') && a !== '--no-index');
@@ -1267,12 +1267,12 @@ function f_cmdDiffNoIndex(args) {
         }
     }
     return { status: 1, stdout: `${out.join('\n')}\n`, stderr: '' };
-}
+};
 
 // diff：HEAD -- <p>（简化统一差异，untracked 不进 diff）/ --cached --quiet（退出码表脏净且
 // 不输出）/ --name-only --diff-filter=U（恒空）。--no-index 在分发层旁路（免仓库门禁）。
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdDiff(repo, args) {
+const f_cmdDiff = (repo, args) => {
     const dd = args.indexOf('--');
     const before = dd >= 0 ? args.slice(0, dd) : args;
     const paths = dd >= 0 ? args.slice(dd + 1) : [];
@@ -1324,7 +1324,7 @@ function f_cmdDiff(repo, args) {
         }
     }
     return f_ok(out.length ? `${out.join('\n')}\n` : '');
-}
+};
 
 // check-ignore -q [--] <p>：根 .gitignore 最小忽略模型
 // 私有方法：仅在本文件实现中使用，不导出。
@@ -1429,7 +1429,7 @@ function f_cmdReset(repo, args) {
     return f_ok(args.includes('--hard') ? `HEAD is now at ${sha.slice(0, 7)} ${commit.message.split('\n')[0]}\n` : '');
 }
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_applyTreeDelta(repo, base, change, target) {
+const f_applyTreeDelta = (repo, base, change, target) => {
     const result = { ...target };
     for (const p of new Set([...Object.keys(base), ...Object.keys(change)])) {
         if (base[p] === change[p]) continue;
@@ -1439,9 +1439,9 @@ function f_applyTreeDelta(repo, base, change, target) {
         else delete result[p];
     }
     return { tree: result };
-}
+};
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdReplay(repo, args, config, reverse) {
+const f_cmdReplay = (repo, args, config, reverse) => {
     // 私有方法：仅在本文件实现中使用，不导出。
     const spec = args.find(a => !a.startsWith('-')) || 'HEAD';
     const sha = f_resolveCommitish(repo, spec), head = f_resolveCommitish(repo, 'HEAD');
@@ -1460,9 +1460,9 @@ function f_cmdReplay(repo, args, config, reverse) {
     const message = reverse ? `Revert "${commit.message.split('\n')[0]}"\n\nThis reverts commit ${sha}.`
         : commit.message + (args.includes('-x') ? `\n\n(cherry picked from commit ${sha})` : '');
     return f_commitTree(repo, applied.tree, message, [head], config);
-}
+};
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdMerge(repo, args, config) {
+const f_cmdMerge = (repo, args, config) => {
     const last = args.at(-1), sha = f_resolveCommitish(repo, last), head = f_resolveCommitish(repo, 'HEAD');
     if (!sha) return { status: 1, stdout: '', stderr: `merge: ${last} - not something we can merge\n` };
     if (f_collectCommits(repo, [head]).some(e => e.sha === sha)) return f_ok('Already up to date.\n');
@@ -1483,9 +1483,9 @@ function f_cmdMerge(repo, args, config) {
     const committed = f_commitTree(repo, merged.tree, message, [head, sha], config);
     if (committed.status) return committed;
     return f_ok("Merge made by the 'ort' strategy.\n");
-}
+};
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdStash(repo, args) {
+const f_cmdStash = (repo, args) => {
     const saved = repo.f_readText('stash.json');
     if (args[0] === 'pop' || args[0] === 'apply') {
         if (!saved) return { status: 1, stdout: '', stderr: 'No stash entries found.\n' };
@@ -1505,9 +1505,9 @@ function f_cmdStash(repo, args) {
     const sha = f_resolveCommitish(repo, 'HEAD'), commit = f_readObject(repo, sha, 'commit');
     f_checkoutTree(repo, f_headTree(repo), true);
     return f_ok(`Saved working directory and index state WIP on ${f_headState(repo).branch}: ${sha.slice(0, 7)} ${commit.message.split('\n')[0]}\n`);
-}
+};
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdWorktree(repo, args) {
+const f_cmdWorktree = (repo, args) => {
     // 私有方法：仅在本文件实现中使用，不导出。
     const action = args[0], operands = args.slice(1).filter(a => !a.startsWith('-'));
     const target = path.resolve(repo.root, operands[0] || '.');
@@ -1550,7 +1550,7 @@ function f_cmdWorktree(repo, args) {
     f_checkoutTree(linked, f_treeOf(repo, f_readObject(repo, sha, 'commit')), true);
     const commit = f_readObject(repo, sha, 'commit');
     return { status: 0, stdout: `HEAD is now at ${sha.slice(0, 7)} ${commit.message.split('\n')[0]}\n`, stderr: preparing };
-}
+};
 // 私有方法：仅在本文件实现中使用，不导出。
 function f_cmdRemote(repo, args) {
     const remotes = JSON.parse(repo.f_readText('remotes.json') || '{}');
@@ -1559,18 +1559,18 @@ function f_cmdRemote(repo, args) {
     return f_ok(Object.keys(remotes).sort().map(name => `${name}\n`).join(''));
 }
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_cmdTransport(repo, command, args) {
+const f_cmdTransport = (repo, command, args) => {
     const remotes = JSON.parse(repo.f_readText('remotes.json') || '{}');
     if (command === 'fetch' && args.includes('--all') && !Object.keys(remotes).length) return f_ok();
     // 私有方法：仅在本文件实现中使用，不导出。
     const remote = args.find(a => !a.startsWith('-')) || 'origin';
     return { status: 128, stdout: '', stderr: `fatal: '${remotes[remote] || remote}' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n` };
-}
+};
 
 // ---------- 分派 ----------
 
 // 私有方法：仅在本文件实现中使用，不导出。
-function f_runGit(argv, options, ctx) {
+const f_runGit = (argv, options, ctx) => {
     const config = new Map();
     let optionalLocks = true;
     let cwd = options?.cwd || ctx.cwd();
@@ -1649,7 +1649,7 @@ function f_runGit(argv, options, ctx) {
     } catch (error) {
         return f_fatal(String(error && error.message ? error.message : error));
     }
-}
+};
 
 // 测试专用方法：显式安装 Git 命令；重复调用保留已有钩子与故障配置。
 export function t_install() {

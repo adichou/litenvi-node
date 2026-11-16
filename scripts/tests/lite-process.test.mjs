@@ -216,7 +216,7 @@ test('命令上下文：argv 安装同步到门面与宿主，unmock 恢复', ()
   try {
     // 输入：假世界安装子进程口径 argv
     mgr.t_defineUserCommand('argv-installer', {
-      i_runSync(_args, ctx) { ctx.installArgv([NODE_COMMAND_PATH, '/mock/project/entry.mjs', '--after']); return { status: 0 }; },
+      i_runSync: (_args, ctx) => { ctx.installArgv([NODE_COMMAND_PATH, '/mock/project/entry.mjs', '--after']); return { status: 0 }; },
     });
     assert.equal(liteChildProcess.spawnSync('argv-installer').status, 0, '命令上下文应能安装 argv');
     // 预期 1：门面视图为安装值

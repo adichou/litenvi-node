@@ -2,8 +2,7 @@
 // （默认真实实现/原生对照环境/diff --no-index 逐字节对照）统一收口于此文件，与各模块主测试文件
 // （mock 世界语义）分离——真实子进程、真实 fs、真实网络等原生 I/O 不再进入业务用例进程。
 // 子进程环境经 native-reference-env.mjs 固定；世界装配沿用各来源文件体例（本文件内局部副本，
-// 随用例自包含）；eslint 双侧共享装配见 lite-cmd-eslint-helpers.mjs（REAL_ROOT 共享常量亦经
-// 该模块导入，git 节迁移时的同值局部副本已并轨）。本文件不承载包自引用
+// 随用例自包含）。Git 对照使用的仓库根在本文件内声明。本文件不承载包自引用
 // 单例检查（该检查仍留在各模块主测试文件）。
 // 用例注释格式：方法级写测试场景；语句中「输入」部分标记输入；断言按「预期 1/2/…」逐条注释。
 
@@ -17,8 +16,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { nativeReferenceEnv } from './native-reference-env.mjs';
-import { setup as setupEslint, write as writeEslintFixture, spawnEslint, REAL_ROOT, TEMP_ROOT, ESLINT_BIN } from './lite-cmd-eslint-helpers.mjs';
+import { t_nativeReferenceEnv } from './native-reference-env.mjs';
 import liteFs from '../lite-fs.mjs';
 import liteChildProcess from '../lite-child_process.mjs';
 import mgr from '../lite-cmd-mgr.mjs';
@@ -38,6 +36,7 @@ import liteTimer, { setTimeout as liteSetTimeout, clearTimeout as liteClearTimeo
 // 共享常量：系统本体文件与排除目录（真实磁盘）——各来源文件的 EXCLUDED 口径同值同名
 const selfFile = new URL(import.meta.url).pathname;
 const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));
+const REAL_ROOT = path.resolve(fileURLToPath(new URL('../../', import.meta.url)));
 
 // ---------- lite-fs：真实 fs 对照（自 lite-fs.test.mjs 迁入） ----------
 
@@ -546,7 +545,7 @@ test('真实 child_process 对照：ref/unref 控制运行引用，unmock 释放
       child.on('close', () => console.log('closed'));
       ${operation}
       console.log('started');
-    `], { encoding: 'utf8', timeout: 3000, env: nativeReferenceEnv() });
+    `], { encoding: 'utf8', timeout: 3000, env: t_nativeReferenceEnv() });
     return { status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr, error: result.error?.code };
   };
   // 输入：默认持有引用、主动 unref、unref 后重新 ref，分别运行原生与内存驱动
@@ -727,7 +726,7 @@ test('真实 exec 对照：参数、编码、shell、输入、失败回包与 Pr
   nativeFs.mkdirSync(realRoot + '/sub'); nativeFs.writeFileSync(realRoot + '/input.txt', 'input\n');
   const scenario = async root => {
     const results = [];
-    const options = { cwd: root, env: nativeReferenceEnv({ EXEC_VALUE: 'value with spaces' }) };
+    const options = { cwd: root, env: t_nativeReferenceEnv({ EXEC_VALUE: 'value with spaces' }) };
     const run = (method, args, extra = {}, input) => new Promise(resolve => {
       const child = liteChildProcess[method](...args, { ...options, ...extra }, (error, stdout, stderr) => {
         results.push({ method, error: f_execErrorShape(error, root), stdout: f_normalizeExecReference(stdout, root), stderr: f_normalizeExecReference(stderr, root), pid: child.pid > 0 });
@@ -795,7 +794,7 @@ test('真实 execFile 对照：超时、取消和回调仅一次', async () => {
       let callbacks = 0;
       const promise = new Promise(resolve => {
         const child = liteChildProcess.execFile(memory ? 'node' : process.execPath, ['-e', 'setInterval(() => {}, 1000)'],
-          { env: nativeReferenceEnv(), ...(abort ? { signal: controller.signal } : { timeout: 20 }) }, (error, stdout, stderr) => {
+          { env: t_nativeReferenceEnv(), ...(abort ? { signal: controller.signal } : { timeout: 20 }) }, (error, stdout, stderr) => {
             callbacks++;
             results.push({ code: error.code, name: error.name, killed: error.killed, signal: error.signal, stdout, stderr });
             resolve(child);
@@ -821,7 +820,7 @@ test('真实 exec 对照：可选参数重载与非法参数', async () => {
   // 输入：exec 各参数重载与非法参数经 lite 门面与原生对照执行。
   const scenario = async () => {
     const output = [];
-    const options = { env: nativeReferenceEnv() };
+    const options = { env: t_nativeReferenceEnv() };
     for (const [name, args] of [['execFile', ['echo']], ['execFile', ['echo', options]],
       ['execFile', ['echo', ['args']]], ['exec', ['echo overload', options]]]) {
       await new Promise(resolve => liteChildProcess[name](...args, (error, stdout, stderr) => { output.push({ error: error?.code, stdout, stderr }); resolve(); }));
@@ -853,7 +852,7 @@ test('真实 Node 对照：spawn 超时 killSignal 终止与 stdio ignore', asyn
     const events = [];
     // 输入：常驻子进程 + 20ms 超时 + SIGKILL，观察事件序与 killed 标记
     const timed = backend.spawn('node', ['-e', 'setInterval(() => {}, 1000)'],
-      { timeout: 20, killSignal: 'SIGKILL', env: nativeReferenceEnv() });
+      { timeout: 20, killSignal: 'SIGKILL', env: t_nativeReferenceEnv() });
     timed.on('spawn', () => events.push('spawn'));
     timed.on('error', () => events.push('error'));
     const timedClose = new Promise(resolve => timed.once('close', (code, signal) => { events.push(['close', code, signal]); resolve(); }));
@@ -861,7 +860,7 @@ test('真实 Node 对照：spawn 超时 killSignal 终止与 stdio ignore', asyn
     await timedClose;
     events.push({ killed: timed.killed });
     // 输入：stdio 'ignore' 的快速命令——公开流为 null，正常退出
-    const ignored = backend.spawn('echo', ['done'], { stdio: 'ignore', env: nativeReferenceEnv() });
+    const ignored = backend.spawn('echo', ['done'], { stdio: 'ignore', env: t_nativeReferenceEnv() });
     const ignoredClose = new Promise(resolve => ignored.once('close', (code, signal) => resolve({ code, signal })));
     const ignoredShape = { stdin: ignored.stdin, stdout: ignored.stdout, stderr: ignored.stderr };
     const ignoredExit = await ignoredClose;
@@ -893,7 +892,7 @@ test('原生对照环境：调试器与颜色设置不污染输出，业务 stde
   delete inherited.NODE_DISABLE_COLORS;
   try {
     const response = liteChildProcess.spawnSync(process.execPath, ['-e', `console.log(42, process.env.LITE_REFERENCE_PROBE); console.error('Debugger attached.');`],
-      { env: nativeReferenceEnv({}, inherited), encoding: 'utf8', timeout: 3000 });
+      { env: t_nativeReferenceEnv({}, inherited), encoding: 'utf8', timeout: 3000 });
     // 预期 1：子进程正常结束，保留业务环境变量，数字输出不带 ANSI 色码
     assert.equal(response.error, undefined, '原生对照子进程应能启动');
     assert.equal(response.status, 0, '原生对照子进程应正常退出');
@@ -902,7 +901,7 @@ test('原生对照环境：调试器与颜色设置不污染输出，业务 stde
     assert.equal(realFs.existsSync(marker), false, '对照子进程不应加载 IDE 的调试预载模块');
     assert.equal(response.stderr, 'Debugger attached.\n', '不得通过过滤 stderr 文本掩盖业务输出');
     // 预期 3：同样的固定环境也适用于系统 ls，目录项不受 macOS 强制着色变量影响
-    const listing = liteChildProcess.spawnSync('ls', ['-a', temporary], { env: nativeReferenceEnv({}, inherited), encoding: 'utf8' });
+    const listing = liteChildProcess.spawnSync('ls', ['-a', temporary], { env: t_nativeReferenceEnv({}, inherited), encoding: 'utf8' });
     assert.equal(listing.status, 0, '系统 ls 对照应正常执行');
     assert.equal(listing.stderr, '', '系统 ls 对照不应额外输出诊断');
     assert.equal(listing.stdout, '.\n..\ndebug-preload.cjs\n', '目录项不应包含强制颜色的 ANSI 色码');
@@ -930,7 +929,7 @@ test('真实 Node 对照：版本、脚本输出、argv/env、模块加载与退
   realFs.writeFileSync(path.join(root, 'failure.mjs'), `throw new Error('node-reference-failure');`);
   const scenario = async memory => {
     const responses = [];
-    const options = { cwd: root, env: nativeReferenceEnv({ LITE_NODE_REFERENCE: 'child-value' }), encoding: 'utf8' };
+    const options = { cwd: root, env: t_nativeReferenceEnv({ LITE_NODE_REFERENCE: 'child-value' }), encoding: 'utf8' };
     const normalize = text => String(text).replaceAll(root, '<root>').replaceAll(process.execPath, '<node>');
     const run = async (command, args, errorOnly = false) => {
       const child = liteChildProcess.spawn(command, args, options);
@@ -1008,7 +1007,7 @@ test('真实 Node 对照：版本、脚本输出、argv/env、模块加载与退
 test('真实 Node 对照：stdin 脚本执行与 -p 求值打印', async () => {
   const scenario = async memory => {
     const responses = [];
-    const options = { env: nativeReferenceEnv(), encoding: 'utf8' };
+    const options = { env: t_nativeReferenceEnv(), encoding: 'utf8' };
     const run = async (args, input) => {
       const child = liteChildProcess.spawn(memory ? 'node' : process.execPath, args, options);
       let stdout = '', stderr = '';
@@ -1050,7 +1049,7 @@ test('真实 OS 对照：文件命令、相对路径、错误输出与同步/异
   // 输入：隔离真实临时目录，固定 C 语言环境与非终端输出；每轮使用全新工作目录
   const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-os-reference-'));
   const realRoot = nativeFs.realpathSync(temporary);
-  const env = nativeReferenceEnv();
+  const env = t_nativeReferenceEnv();
   const scenario = async (root, fileSystem, asynchronous) => {
     fileSystem.mkdirSync(root, { recursive: true });
     fileSystem.writeFileSync(path.join(root, 'source.txt'), 'alpha\n');
@@ -1149,7 +1148,7 @@ test('真实 OS 对照：文件命令、相对路径、错误输出与同步/异
 
 /** 场景：只向本用例启动的进程发信号，退出码借原生 shell 内建 exit 作对照。 */
 test('真实 OS 对照：kill 探测、信号终止、失效 PID 与 exit 退出码', async () => {
-  const env = nativeReferenceEnv();
+  const env = t_nativeReferenceEnv();
   const scenario = async (memory, asynchronous) => {
     const responses = [];
     const target = liteChildProcess.spawn(memory ? 'node' : process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { env });
@@ -1211,7 +1210,7 @@ test('真实 OS 对照：kill 探测、信号终止、失效 PID 与 exit 退出
 
 function f_setupGit() {
   liteFs.t_mock({ exclude: [REAL_ROOT] });
-  t_installGit(); // 卷建立后再安装——持久卷已存在时不依赖惰性安装时序（同 eslint 装配纪律）
+  t_installGit(); // 卷建立后再安装——持久卷已存在时不依赖惰性安装时序
   liteFs.mkdirSync('/mock/project', { recursive: true });
   liteFs.mkdirSync('/mock/root', { recursive: true });
   liteFs.mkdirSync('/mock/elsewhere', { recursive: true });
@@ -1774,7 +1773,7 @@ const lockConfig = ['-c', 'user.name=Reference', '-c', 'user.email=reference@exa
 
 function f_setupGitLock() {
   liteFs.t_mock({ exclude: [REAL_ROOT] });
-  t_installGit(); // 卷建立后再安装（同 eslint 装配纪律）
+  t_installGit(); // 卷建立后再安装
   liteFs.mkdirSync('/mock/repo', { recursive: true });
   liteChildProcess.t_mock();
   mgr.command('git').t_onRun(null);
@@ -1800,10 +1799,10 @@ test('真实 Git 对照：索引锁阻止写入但不阻止状态读取', () => 
     const unchanged = filesystem.readFileSync(`${root}/.git/index.lock`, 'utf8');
     filesystem.unlinkSync(`${root}/.git/index.lock`);
     const after = run(['status', '--porcelain']);
-    return { regular: [regular.status, regular.stdout], optional: [optional.status, optional.stdout],
-      add: [add.status, /index\.lock.*File exists/.test(add.stderr)],
-      commit: [commit.status, /index\.lock.*File exists/.test(commit.stderr)], unchanged,
-      after: [after.status, after.stdout] };
+    return { f_regular: [regular.status, regular.stdout], f_optional: [optional.status, optional.stdout],
+      f_add: [add.status, /index\.lock.*File exists/.test(add.stderr)],
+      f_commit: [commit.status, /index\.lock.*File exists/.test(commit.stderr)], f_unchanged: unchanged,
+      f_after: [after.status, after.stdout] };
   }
   try {
     const expected = scenario(temp, nativeFs, args => nativeSpawnSync('git', args, { cwd: temp, lockEnv, encoding: 'utf8' }));
@@ -1813,161 +1812,6 @@ test('真实 Git 对照：索引锁阻止写入但不阻止状态读取', () => 
       assert.deepEqual(actual, expected, '持锁时读写结果、索引和锁文件应与真实 Git 一致');
     } finally { done(); }
   } finally { nativeFs.rmSync(temp, { recursive: true, force: true }); }
-});
-
-// ---------- lite-cmd-eslint：真实 ESLint CLI 对照与覆盖率偏移锚定（自 lite-cmd-eslint.test.mjs 迁入；装配见 lite-cmd-eslint-helpers.mjs） ----------
-
-/** 场景：退出码与 JSON 报告的引擎事实与真实 ESLint CLI 对照（eslint.org 文档 CLI「Exit Codes」
- * 与内置 formatter：https://eslint.org/docs/latest/use/command-line-interface#exit-codes /
- * https://eslint.org/docs/latest/use/formatters）——干净 0 / 存在 error 或 warning 超
- * --max-warnings 1 / fatal 2；JSON 交集字段（filePath、ruleId/severity/line/column/message/
- * fatal、errorCount/warningCount/fatalErrorCount）来自同一真实引擎，应逐值一致。声明为
- * 近似口径的格式排版面（endLine/suggestions/source 等超集字段、fatal 消息措辞）不纳入对照。 */
-test('真实 ESLint 对照：退出码口径与 JSON 报告引擎事实', async () => {
-  const temporary = nativeFs.mkdtempSync(path.join(TEMP_ROOT, 'lite-eslint-reference-'));
-  const realRoot = nativeFs.realpathSync(temporary);
-  const configSource = `export default [{
-  files: ['**/*.js'],
-  languageOptions: { ecmaVersion: 'latest', sourceType: 'commonjs' },
-  rules: { 'no-debugger': 'error', 'no-unused-vars': 'warn' },
-}];
-`;
-  nativeFs.writeFileSync(path.join(realRoot, 'eslint.config.mjs'), configSource);
-  nativeFs.writeFileSync(path.join(realRoot, 'clean.js'), 'var ok = 2;\n');
-  nativeFs.writeFileSync(path.join(realRoot, 'broken.js'), 'debugger;\nvar x = 1;\n');
-  nativeFs.writeFileSync(path.join(realRoot, 'syntax.js'), 'var var var;\n');
-  const scenario = async memory => {
-    const observations = [];
-    const run = async argv => {
-      const result = memory
-        ? (await spawnEslint(argv, { cwd: '/mock/project', encoding: 'utf8' }))
-        : nativeSpawnSync(process.execPath, [ESLINT_BIN, ...argv], { cwd: realRoot, env: nativeReferenceEnv(), encoding: 'utf8' });
-      return result;
-    };
-    // 输入：干净文件 / 违规文件 / 仅警告超限 / 语法错误（fatal）/ 缺配置（fatal）
-    observations.push({ clean: (await run(['clean.js', '--format', 'json'])).status });
-    const mixed = (await run(['clean.js', 'broken.js', '--format', 'json']));
-    const report = JSON.parse(mixed.stdout).map(entry => ({
-      file: path.basename(entry.filePath),
-      counts: [entry.errorCount, entry.warningCount, entry.fatalErrorCount, entry.fixableErrorCount, entry.fixableWarningCount],
-      messages: entry.messages.map(message => ({ ruleId: message.ruleId, severity: message.severity,
-        line: message.line, column: message.column, message: message.message, fatal: message.fatal ?? false })),
-    })).sort((a, b) => a.file.localeCompare(b.file));
-    observations.push({ mixedStatus: mixed.status, report });
-    const fatal = (await run(['syntax.js', '--format', 'json']));
-    observations.push({ fatalStatus: fatal.status,
-      fatalMessage: JSON.parse(fatal.stdout)[0].messages.map(message => ({
-        ruleId: message.ruleId, severity: message.severity, fatal: message.fatal ?? false,
-        message: /Parsing error/.test(message.message) ? 'Parsing error' : message.message })) });
-    observations.push({ warningsLimited: (await run(['--max-warnings', '0', 'broken.js'])).status,
-      warningsAllowed: (await run(['--max-warnings', '1', 'broken.js'])).status });
-    // 输入：子目录请求命中向上查找的父级配置（0）；真隔离目录无任何配置（fatal 2）
-    observations.push({ upwardSearch: (await (async () => {
-      const nested = memory ? '/mock/project/nested' : path.join(realRoot, 'nested');
-      (memory ? liteFs : nativeFs).mkdirSync(nested, { recursive: true });
-      (memory ? liteFs : nativeFs).writeFileSync(path.join(nested, 'd.js'), 'var q = 1;\n');
-      return (memory
-        ? (await spawnEslint(['d.js'], { cwd: nested, encoding: 'utf8' }))
-        : nativeSpawnSync(process.execPath, [ESLINT_BIN, 'd.js'], { cwd: nested, env: nativeReferenceEnv(), encoding: 'utf8' })).status;
-    })()) });
-    observations.push({ noConfigAnyWhere: (await (async () => {
-      const isolated = memory ? '/mock/isolated-no-config' : nativeFs.realpathSync(nativeFs.mkdtempSync(path.join(TEMP_ROOT, 'lite-eslint-bare-')));
-      (memory ? liteFs : nativeFs).mkdirSync(isolated, { recursive: true });
-      (memory ? liteFs : nativeFs).writeFileSync(path.join(isolated, 'd.js'), 'var q = 1;\n');
-      return (memory
-        ? (await spawnEslint(['d.js'], { cwd: isolated, encoding: 'utf8' }))
-        : nativeSpawnSync(process.execPath, [ESLINT_BIN, 'd.js'], { cwd: isolated, env: nativeReferenceEnv(), encoding: 'utf8' })).status;
-    })()) });
-    return observations;
-  };
-  try {
-    const expected = (await scenario(false));
-    const done = setupEslint();
-    try {
-      writeEslintFixture('/mock/project', 'eslint.config.mjs', configSource);
-      writeEslintFixture('/mock/project', 'clean.js', 'var ok = 2;\n');
-      writeEslintFixture('/mock/project', 'broken.js', 'debugger;\nvar x = 1;\n');
-      writeEslintFixture('/mock/project', 'syntax.js', 'var var var;\n');
-      // 预期：退出码映射与 JSON 引擎事实（规则 ID、严重级、位置、消息、计数）与真实 CLI 一致
-      assert.deepEqual((await scenario(true)), expected, '内存 ESLint 退出码与 JSON 引擎事实应与真实 CLI 一致');
-    } finally { done(); }
-  } finally { nativeFs.rmSync(temporary, { recursive: true, force: true }); }
-});
-
-/** 场景：stylish 计数行与目标不匹配 fatal 与真实 ESLint CLI 对照（eslint.org 文档 formatter
- * stylish、CLI 退出码：https://eslint.org/docs/latest/use/formatters /
- * https://eslint.org/docs/latest/use/command-line-interface#exit-codes）——末行
- * ✖ N problems (X errors, Y warnings) 与无匹配目标 exit 2。stylish 的列对齐排版为头注释
- * 声明的简化口径，只比末行；无匹配目标的 fatal 消息措辞两侧各按声明（引号与提示行不同），
- * 只比退出码。 */
-test('真实 ESLint 对照：stylish 计数行与无匹配目标退出码', async () => {
-  // 输入：同一违规文件分别经内存卷与真实 eslint 执行并对比输出。
-  const temporary = nativeFs.mkdtempSync(path.join(TEMP_ROOT, 'lite-eslint-stylish-'));
-  const realRoot = nativeFs.realpathSync(temporary);
-  const configSource = `export default [{
-  files: ['**/*.js'],
-  languageOptions: { ecmaVersion: 'latest', sourceType: 'commonjs' },
-  rules: { 'no-debugger': 'error', 'no-unused-vars': 'warn' },
-}];
-`;
-  nativeFs.writeFileSync(path.join(realRoot, 'eslint.config.mjs'), configSource);
-  nativeFs.writeFileSync(path.join(realRoot, 'broken.js'), 'debugger;\nvar x = 1;\n');
-  const scenario = async memory => {
-    const run = async argv => (memory
-      ? (await spawnEslint(argv, { cwd: '/mock/project', encoding: 'utf8' }))
-      : nativeSpawnSync(process.execPath, [ESLINT_BIN, ...argv], { cwd: realRoot, env: nativeReferenceEnv(), encoding: 'utf8' }));
-    const observations = {};
-    const stylish = (await run(['broken.js']));
-    observations.stylishTail = stylish.stdout.trimEnd().split('\n').at(-1);
-    observations.stylishStatus = stylish.status;
-    observations.noMatch = (await run(['missing-target'])).status;
-    return observations;
-  };
-  try {
-    const expected = (await scenario(false));
-    const done = setupEslint();
-    try {
-      writeEslintFixture('/mock/project', 'eslint.config.mjs', configSource);
-      writeEslintFixture('/mock/project', 'broken.js', 'debugger;\nvar x = 1;\n');
-      // 预期：stylish 末行计数与无匹配目标 exit 2 与真实 CLI 一致
-      assert.deepEqual((await scenario(true)), expected, '内存 ESLint stylish 计数行应与真实 CLI 一致');
-    } finally { done(); }
-  } finally { nativeFs.rmSync(temporary, { recursive: true, force: true }); }
-});
-
-/** 场景：读取原生 V8 原始覆盖率，逐一核对实际执行规则的函数字符偏移和调用计数——内存侧
- * 同 runner 对照（覆盖率偏移 1:1：未覆盖行映射源文件行号）见 lite-cmd-eslint.test.mjs。 */
-test('原生规则的 V8 字符偏移与源码精确一致', () => {
-  const temporary = nativeFs.mkdtempSync(path.join(TEMP_ROOT, 'eslint-native-coverage-'));
-  const runner = path.join(REAL_ROOT, 'scripts/tests/fixtures/coverage-offset-run.mjs');
-  const probe = path.join(REAL_ROOT, 'scripts/tests/fixtures/coverage-offset-probe.mjs');
-  const source = nativeFs.readFileSync(probe, 'utf8');
-  try {
-    // 输入：独立原生测试运行器执行完整命令夹具，采集真实规则模块的 raw coverage。
-    const env = nativeReferenceEnv({ NODE_V8_COVERAGE: temporary });
-    delete env.NODE_TEST_CONTEXT;
-    const result = nativeSpawnSync(process.execPath, ['--test', '--experimental-test-coverage', runner], {
-      env, encoding: 'utf8', timeout: 10000,
-    });
-    assert.equal(result.status, 0, `原生覆盖率执行应成功：${result.stderr}\n${result.stdout}`);
-    const scripts = nativeFs.readdirSync(temporary).filter(name => name.endsWith('.json'))
-      .flatMap(name => JSON.parse(nativeFs.readFileSync(path.join(temporary, name), 'utf8')).result || []);
-    const script = scripts.find(item => item.url === pathToFileURL(nativeFs.realpathSync(probe)).href);
-    // 预期 1：实际参与检查的规则直接属于原文件，每个函数起始字符与原始源码完全一致。
-    assert.ok(script, '原始覆盖率应包含实际执行的规则模块文件 URL');
-    for (const name of ['covered', 'partlyCovered', 'neverCalled']) {
-      const fn = script.functions.find(item => item.functionName === name);
-      const expected = source.indexOf(`function ${name}(`);
-      assert.ok(expected >= 0, `源码应包含探针函数 ${name}`);
-      assert.ok(fn, `原始覆盖率应包含函数 ${name}`);
-      assert.equal(fn.ranges[0].startOffset, expected, `${name} 的 V8 字符偏移必须与原始源码精确一致`);
-    }
-    // 预期 2：计数来自实际规则执行，未调用函数不能因加载或文件出现而被计为覆盖。
-    assert.ok(script.functions.find(item => item.functionName === 'covered').ranges[0].count > 0,
-      'covered 应在真实规则执行中被调用');
-    assert.equal(script.functions.find(item => item.functionName === 'neverCalled').ranges[0].count, 0,
-      'neverCalled 应保持真实未覆盖');
-  } finally { nativeFs.rmSync(temporary, { recursive: true, force: true }); }
 });
 
 // ---------- lite-process：真实 Process 对照（自 lite-process.test.mjs 迁入） ----------
@@ -2122,7 +1966,7 @@ function f_probe(port, probePath = '/api/health') {
 }
 
 /** 对照 handler：同一份请求/响应行为供客户端面、服务端面用例复用。 */
-export function referenceHandler(req, res) {
+function f_referenceHandler(req, res) {
   const chunks = [];
   req.on('data', chunk => chunks.push(chunk));
   req.on('end', () => {
@@ -2144,7 +1988,7 @@ export function referenceHandler(req, res) {
 }
 
 /** 对照请求：同一客户端观测面（多形态重载/事件序/字节与请求头快照）。 */
-export function requestSnapshot(client, port, { path = '/echo?q=%E4%B8%AD', method = 'POST', form = 'options', get = false, chunks = [] } = {}) {
+function f_requestSnapshot(client, port, { path = '/echo?q=%E4%B8%AD', method = 'POST', form = 'options', get = false, chunks = [] } = {}) {
   return new Promise((resolve, reject) => {
     const events = [], output = [];
     let deadline, snapshot;
@@ -2180,7 +2024,7 @@ export function requestSnapshot(client, port, { path = '/echo?q=%E4%B8%AD', meth
 }
 
 /** 对照取消：destroy(error) 事件序与 destroyed 标记。 */
-export function destroySnapshot(client, port) {
+function f_destroySnapshot(client, port) {
   return new Promise((resolve, reject) => {
     const events = [];
     const deadline = setTimeout(() => reject(new Error('HTTP destroy 对照超时')), 2000);
@@ -2196,7 +2040,7 @@ export function destroySnapshot(client, port) {
 test('真实 HTTP 对照：request/get、URL 重载、请求头、二进制正文与取消事件', async () => {
   const scenario = async memory => {
     if (memory) { liteHttp.t_mock(); liteServer.t_mock(); }
-    const server = (memory ? liteServer : http).createServer(referenceHandler);
+    const server = (memory ? liteServer : http).createServer(f_referenceHandler);
     server.listen(0, '127.0.0.1');
     await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
     const port = memory ? server.port : server.address().port;
@@ -2211,8 +2055,8 @@ test('真实 HTTP 对照：request/get、URL 重载、请求头、二进制正�
         { get: true, method: 'POST' }, { path: '/binary', method: 'GET' },
         { path: '/empty', method: 'GET' }, { path: '/echo', method: 'HEAD' },
         { path: '/missing', method: 'GET' },
-      ]) responses.push(await requestSnapshot(client, port, options));
-      responses.push(await destroySnapshot(client, port));
+      ]) responses.push(await f_requestSnapshot(client, port, options));
+      responses.push(await f_destroySnapshot(client, port));
       return responses;
     } finally {
       await new Promise(resolve => server.close(resolve));
@@ -2245,7 +2089,7 @@ test('真实 HTTP 对照：拒连错误字段、statusMessage 与响应头小写
   const scenario = async (memory, refusedPort) => {
     if (memory) { liteHttp.t_mock(); liteServer.t_mock(); }
     const client = memory ? liteHttp : http;
-    const server = (memory ? liteServer : http).createServer(referenceHandler);
+    const server = (memory ? liteServer : http).createServer(f_referenceHandler);
     server.listen(0, '127.0.0.1');
     await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
     const port = memory ? server.port : server.address().port;
@@ -2289,7 +2133,7 @@ test('真实 Server 对照：监听地址、回调、响应头、字节与关闭
   const scenario = async memory => {
     if (memory) { liteHttp.t_mock(); liteServer.t_mock(); }
     const events = [];
-    const server = (memory ? liteServer : http).createServer(referenceHandler);
+    const server = (memory ? liteServer : http).createServer(f_referenceHandler);
     const before = { listening: server.listening, address: server.address() };
     server.on('listening', () => events.push('listening'));
     const listening = new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
@@ -2301,7 +2145,7 @@ test('真实 Server 对照：监听地址、回调、响应头、字节与关闭
     try {
       for (const options of [{ chunks: ['中', Buffer.from([0, 255])] }, { path: '/binary', method: 'GET' },
         { path: '/empty', method: 'GET' }, { path: '/echo', method: 'HEAD' }, { path: '/missing', method: 'GET' }])
-        responses.push(await requestSnapshot(http, address.port, options));
+        responses.push(await f_requestSnapshot(http, address.port, options));
       const during = { listening: server.listening, portValid: address.port > 0 };
       server.on('close', () => events.push('close'));
       await new Promise(resolve => server.close(() => { events.push('close-callback'); resolve(); }));
