@@ -354,18 +354,18 @@ f_osCommands['/mock-cmd/bin/exit'] = {
 // 显式调用 t_install() 安装（与 lite-cmd-git 同口径）。kill 需要的 signal 在
 // lite-child_process，模块内已 import。
 // 内部导出：命令登记表，t_install() 整体安装；测试通过 child_process 的公共入口验证。
-export const i_COMMANDS = f_osCommands;
+const f_COMMANDS = f_osCommands;
 
 // 测试专用：返回命令登记表本体，供包自引用单例检查比对模块身份——命令集无门面对象，
 // 以本函数身份验证 specifier 与相对导入同源；生产代码禁止使用。
 export function t_commands() {
-    return i_COMMANDS;
+    return f_COMMANDS;
 }
 
 // 测试专用：显式安装 OS 命令集（open/ls/pwd/cwd/kill、mkdir/rm/cp/mv/cat/touch/test 与
 // cd/exit 内建）；重复调用保留已有钩子与故障配置（与 lite-cmd-git 同口径）。
 export function t_install() {
     if (mgr.command('/mock-cmd/bin/ls')) return;
-    for (const [cmdPath, impl] of Object.entries(i_COMMANDS))
+    for (const [cmdPath, impl] of Object.entries(f_COMMANDS))
         mgr.i_defineCommand(cmdPath, impl);
 }

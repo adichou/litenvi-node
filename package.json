@@ -11,9 +11,9 @@
     "scripts/*.cjs"
   ],
   "scripts": {
-    "test": "node --test scripts/tests/*.test.mjs",
+    "test": "node --test \"scripts/tests/**/*.test.mjs\"",
     "pretest": "npm run lint",
-    "test:coverage": "node --test --experimental-test-coverage scripts/tests/*.test.mjs",
+    "test:coverage": "node --test --experimental-test-coverage \"scripts/tests/**/*.test.mjs\"",
     "lint": "eslint . --max-warnings 0"
   },
   "license": "MIT",

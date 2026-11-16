@@ -488,7 +488,7 @@ const f_npmVersions = Object.freeze({
 // npm 版本固定为 10.9.0，mock 时不启动真实进程。导入本模块不登记命令（mgr 不自动加载
 // 命令集）——测试须显式调用 t_install() 安装（与 lite-cmd-git 同口径）。
 // 内部导出：命令登记表，t_install() 整体安装；测试通过 child_process 的公共入口验证。
-export const i_COMMANDS = {
+const f_COMMANDS = {
     [f_NODE_COMMAND_PATH]: f_nodeImpl,
     '/mock-cmd/usr/local/bin/npm': {
         // 内部方法：命令实现协议，由执行层分派，测试通过 spawn 等公共入口触发。
@@ -535,14 +535,14 @@ export const i_COMMANDS = {
 // 测试专用：返回命令登记表本体，供包自引用单例检查比对模块身份——命令集无门面对象，
 // 以本函数身份验证 specifier 与相对导入同源；生产代码禁止使用。
 export function t_commands() {
-    return i_COMMANDS;
+    return f_COMMANDS;
 }
 
 // 测试专用：显式安装 node/npm 系统命令；重复调用保留已有钩子与故障配置（与 lite-cmd-git
 // 同口径）。导入本模块不登记——需要 node/npm 命令的世界装配方（测试）显式调用。
 export function t_install() {
     if (mgr.command(f_NODE_COMMAND_PATH)) return;
-    for (const [cmdPath, impl] of Object.entries(i_COMMANDS))
+    for (const [cmdPath, impl] of Object.entries(f_COMMANDS))
         mgr.i_defineCommand(cmdPath, impl);
 }
 

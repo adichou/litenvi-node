@@ -2,7 +2,7 @@
 // 真实时间等待一律显式走 globalThis.setTimeout——用例自身导入的 setTimeout 在 mock 后是虚拟时钟。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import liteTimer, { setTimeout, clearTimeout, setInterval, clearInterval, Date } from '../lite-timer.mjs';
+import liteTimer, { setTimeout, clearTimeout, setInterval, clearInterval, Date } from '../../lite-timer.mjs';
 
 const NativeDate = globalThis.Date;
 const f_realSleep = (ms) => new Promise(resolve => globalThis.setTimeout(resolve, ms));
@@ -143,6 +143,6 @@ test('入参校验：mock 形状/纪元、advanceMs 数值与状态', async () =
  * 遮蔽绑定与库内部相对导入必须是同一实例，否则虚拟时钟会静默分裂（exports 变动先红）。 */
 test('包自引用 specifier 与相对导入共享同一单例', async () => {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
-  const selfRef = await import('../lite-timer.mjs');
+  const selfRef = await import('../../lite-timer.mjs');
   assert.equal(selfRef.default, liteTimer, '同一模块经不同 specifier 应共享同一实例');
 });

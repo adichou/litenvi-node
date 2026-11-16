@@ -14,16 +14,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import liteChildProcess from '../lite-child_process.mjs';
-import { t_install } from '../lite-cmd-git.mjs';
-import { t_install as t_installOsCommands } from '../lite-cmd-os.mjs';
-import mgr from '../lite-cmd-mgr.mjs';
-import liteFs from '../lite-fs.mjs';
+import liteChildProcess from '../../lite-child_process.mjs';
+import { t_install } from '../../lite-cmd-git.mjs';
+import { t_install as t_installOsCommands } from '../../lite-cmd-os.mjs';
+import mgr from '../../lite-cmd-mgr.mjs';
+import liteFs from '../../lite-fs.mjs';
 import os from 'node:os';
 
 // 逐用例装配：mock 内存卷 + spawn 边界（git 执行唯一入口——新架构执行寻址须卷内 /mock-cmd
 // 系统卷）；收尾卸载子进程运行态并摘除钩子。卷排除本仓库根（真实文件不落卷）
-const REAL_ROOT = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
+const REAL_ROOT = path.resolve(fileURLToPath(new URL('../../', import.meta.url)));
 function f_setup() {
   t_install();
   t_installOsCommands(); // 子命令故障负向断言以 /bin/echo（非 Git 命令）为对照，须在册
@@ -1209,7 +1209,7 @@ test('Git 写入失败：ENOSPC 通过命令结果报告，撤销后可恢复', 
  * 安装入口与库内部相对导入必须是同一实例（exports 变动先红）。 */
 test('包自引用 specifier 与相对导入共享同一单例', async () => {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
-  const selfRef = await import('../lite-cmd-git.mjs');
+  const selfRef = await import('../../lite-cmd-git.mjs');
   assert.equal(selfRef.t_install, t_install, '同一模块经不同 specifier 应共享同一实例');
 });
 

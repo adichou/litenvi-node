@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import liteFs from '../lite-fs.mjs';
-import liteChildProcess from '../lite-child_process.mjs';
-import mgr from '../lite-cmd-mgr.mjs';
-import { t_install } from '../lite-cmd-git.mjs';
+import liteFs from '../../lite-fs.mjs';
+import liteChildProcess from '../../lite-child_process.mjs';
+import mgr from '../../lite-cmd-mgr.mjs';
+import { t_install } from '../../lite-cmd-git.mjs';
 
-const realRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
+const realRoot = path.resolve(fileURLToPath(new URL('../../', import.meta.url)));
 function f_setup() {
   t_install();
   liteFs.t_mock({ exclude: [realRoot] });

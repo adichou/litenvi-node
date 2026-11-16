@@ -9,13 +9,13 @@
 // 用例注释格式：方法级写测试场景；语句中「输入」部分标记输入；断言按「预期 1/2/…」逐条注释。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import liteChildProcess from '../lite-child_process.mjs';
-import mgr from '../lite-cmd-mgr.mjs';
-import liteFs from '../lite-fs.mjs';
-import { t_install as t_installGit } from '../lite-cmd-git.mjs';
-import { t_install as t_installNodeCommands } from '../lite-cmd-node.mjs';
-import { t_install as t_installOsCommands } from '../lite-cmd-os.mjs';
-import { ProcessExitError } from '../lite-process-exit-error.mjs';
+import liteChildProcess from '../../lite-child_process.mjs';
+import mgr from '../../lite-cmd-mgr.mjs';
+import liteFs from '../../lite-fs.mjs';
+import { t_install as t_installGit } from '../../lite-cmd-git.mjs';
+import { t_install as t_installNodeCommands } from '../../lite-cmd-node.mjs';
+import { t_install as t_installOsCommands } from '../../lite-cmd-os.mjs';
+import { ProcessExitError } from '../../lite-process-exit-error.mjs';
 
 // 系统命令集显式安装（导入不登记）：本文件用例 spawn node/npm 与 echo/kill/ls 等 OS 命令
 t_installNodeCommands();

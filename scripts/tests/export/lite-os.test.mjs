@@ -1,7 +1,7 @@
 // lite-os 门面的黑盒用例：路径锚点覆盖、只读标识透传与单例契约。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import liteOs from '../lite-os.mjs';
+import liteOs from '../../lite-os.mjs';
 import os from 'node:os';
 
 /** 场景：未 mock 时全部面原样转发真实 node:os——生产行为不变。 */

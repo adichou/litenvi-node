@@ -22,4 +22,6 @@ export default createConfig({
   // 禁令；本地来源（file: 的 atb-eslint-plugin 平级仓）不检——开发分支联调形态，main 分支
   // 守护归交付流程（看板 REQ-20261116-003）。
   packageJson: { parser: pluginPackageJson.configs.recommended.languageOptions.parser },
+  // 纯库无 UI 面：uiTest 关闭（测试三分区退化为 bin/export，ui/ 不设区）。
+  uiTest: { enabled: false },
 });

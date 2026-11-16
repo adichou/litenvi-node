@@ -6,13 +6,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import liteChildProcess from '../lite-child_process.mjs';
-import { liteProcess } from '../lite-process.mjs';
-import mgr from '../lite-cmd-mgr.mjs';
+import liteChildProcess from '../../lite-child_process.mjs';
+import { liteProcess } from '../../lite-process.mjs';
+import mgr from '../../lite-cmd-mgr.mjs';
 // 命令集自测经显式 t_install() 安装（导入不登记，mgr 不再反向加载本模块，无 TDZ 约束）；
 // echo 等 OS 命令是嵌套 spawn 用例的对照载荷，一并安装
-import { t_commands, t_install } from '../lite-cmd-node.mjs';
-import { t_install as t_installOsCommands } from '../lite-cmd-os.mjs';
+import { t_commands, t_install } from '../../lite-cmd-node.mjs';
+import { t_install as t_installOsCommands } from '../../lite-cmd-os.mjs';
 
 const NODE_COMMAND_PATH = '/mock-cmd/usr/local/bin/node';
 const selfFile = new URL(import.meta.url).pathname;
@@ -32,9 +32,9 @@ function f_setup() {
 // 夹具工厂：真实目录提供入口源码，共享 liteFs 门面承接内存文件副作用。
 import realFs, { readFileSync as nativeReadFileSync, writeFileSync as nativeWriteFileSync, existsSync as nativeExistsSync } from 'node:fs';
 import os from 'node:os';
-import liteFs from '../lite-fs.mjs';
-import liteServer from '../lite-server.mjs';
-const liteFsUrl = new URL('../lite-fs.mjs', import.meta.url).href;
+import liteFs from '../../lite-fs.mjs';
+import liteServer from '../../lite-server.mjs';
+const liteFsUrl = new URL('../../lite-fs.mjs', import.meta.url).href;
 let fixtureSeq = 0;
 function f_writeFixture(code) {
   const name = path.join(EXCLUDED, `lite-cmd-node-fixture-${process.pid}-${++fixtureSeq}.mjs`);
@@ -477,7 +477,7 @@ test('假世界文件入口：argv 双视图一致、并发隔离与父世界保
   // 输入：父世界 argv 为 parent.mjs --parent，入口记录两条 argv 视图并等待 stdin 放行
   const nativeArgv = process.argv;
   const parentArgv = [NODE_COMMAND_PATH, '/mock/project/parent.mjs', '--parent'];
-  const processUrl = new URL('../lite-process.mjs', import.meta.url).href;
+  const processUrl = new URL('../../lite-process.mjs', import.meta.url).href;
   const fixture = f_writeFixture(`
     import { liteProcess } from ${JSON.stringify(processUrl)};
     const f_snapshot = () => ({ native: [...process.argv], facade: [...liteProcess.argv] });
@@ -557,7 +557,7 @@ test('假世界文件入口：异常退出与 kill 保持父世界 argv', async 
   // 输入：入口先输出两条 argv 视图，收到 stdin 后抛错或显式退出；kill 场景保持等待
   const nativeArgv = process.argv;
   const parentArgv = [NODE_COMMAND_PATH, '/mock/project/parent.mjs', '--parent'];
-  const processUrl = new URL('../lite-process.mjs', import.meta.url).href;
+  const processUrl = new URL('../../lite-process.mjs', import.meta.url).href;
   const fixture = f_writeFixture(`
     import { liteProcess } from ${JSON.stringify(processUrl)};
     console.log(JSON.stringify({ native: process.argv, facade: liteProcess.argv }));
@@ -671,7 +671,7 @@ test('长驻任务：定时器保持存活，kill 后停止输出并关闭', asy
 test('共享服务门面：内存服务关闭后 Node 正常退出', async () => {
   const done = f_setup();
   liteServer.t_mock();
-  const serverUrl = new URL('../lite-server.mjs', import.meta.url).href;
+  const serverUrl = new URL('../../lite-server.mjs', import.meta.url).href;
   const fixture = f_writeFixture(`
     import server from '${serverUrl}';
     const listener = server.createServer((request, response) => response.end('ok'));
@@ -815,7 +815,7 @@ test('Process 字段写入：脚本与宿主环境保持各自视图', async () 
 test('活动服务清理：终止 Node 后关闭其监听端口', async () => {
   const done = f_setup();
   liteServer.t_mock();
-  const serverUrl = new URL('../lite-server.mjs', import.meta.url).href;
+  const serverUrl = new URL('../../lite-server.mjs', import.meta.url).href;
   const fixture = f_writeFixture(`
     import server from '${serverUrl}';
     server.createServer((_req, res) => res.end('active')).listen(0, () => console.log('ready'));
@@ -883,7 +883,7 @@ test('信号关停遇到服务关闭挂起时仍触发进程内兜底退出', as
   const done = f_setup();
   liteServer.t_mock();
   const fixture = f_writeFixture(`
-    import liteServer from ${JSON.stringify(new URL('../lite-server.mjs', import.meta.url).href)};
+    import liteServer from ${JSON.stringify(new URL('../../lite-server.mjs', import.meta.url).href)};
     const server = liteServer.createServer((_req, res) => res.end('ok'));
     server.listen(0, () => console.log('ready'));
     process.on('SIGTERM', () => {

@@ -10,9 +10,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
-import liteHttp from '../lite-http.mjs';
-import liteServer from '../lite-server.mjs';
-import { t_urlInjectionRequest } from './lite-http-helpers.mjs';
+import liteHttp from '../../lite-http.mjs';
+import liteServer from '../../lite-server.mjs';
+import { t_urlInjectionRequest } from '../lite-http-helpers.mjs';
 
 /** 场景：多个服务实例按域名与端口隔离路由，单实例关闭不影响其余。 */
 test('多个服务按域名和端口独立路由，关闭互不影响', async () => {
@@ -621,7 +621,7 @@ test('服务关闭故障闸门延迟关闭回调并可释放', async () => {
  * 门面与库内部相对导入必须是同一实例，否则服务账本会静默分裂（exports 变动先红）。 */
 test('包自引用 specifier 与相对导入共享同一单例', async () => {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
-  const selfRef = await import('../lite-server.mjs');
+  const selfRef = await import('../../lite-server.mjs');
   assert.equal(selfRef.default, liteServer, '同一模块经不同 specifier 应共享同一实例');
 });
 

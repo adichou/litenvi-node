@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import liteFs from '../lite-fs.mjs';
+import liteFs from '../../lite-fs.mjs';
 
 /** 场景：wx 形态独占创建在目标已存在（文件与符号链接）时明确失败。 */
 test('独占创建不能覆盖已有文件或符号链接', () => {

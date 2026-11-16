@@ -16,27 +16,27 @@ import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { t_nativeReferenceEnv } from './native-reference-env.mjs';
-import liteFs from '../lite-fs.mjs';
-import liteChildProcess from '../lite-child_process.mjs';
-import mgr from '../lite-cmd-mgr.mjs';
+import { t_nativeReferenceEnv } from '../native-reference-env.mjs';
+import liteFs from '../../lite-fs.mjs';
+import liteChildProcess from '../../lite-child_process.mjs';
+import mgr from '../../lite-cmd-mgr.mjs';
 // 内存对照场景 spawn node 与 cat/echo/ls/pwd 等 OS 命令：显式安装两套系统命令集
 //（导入不登记，mgr 不自动加载命令集）
-import { t_install as t_installNodeCommands } from '../lite-cmd-node.mjs';
-import { t_install as t_installOsCommands } from '../lite-cmd-os.mjs';
+import { t_install as t_installNodeCommands } from '../../lite-cmd-node.mjs';
+import { t_install as t_installOsCommands } from '../../lite-cmd-os.mjs';
 t_installNodeCommands();
 t_installOsCommands();
-import { liteProcess } from '../lite-process.mjs';
-import { ProcessExitError } from '../lite-process-exit-error.mjs';
-import { t_install as t_installGit } from '../lite-cmd-git.mjs';
-import liteHttp from '../lite-http.mjs';
-import liteServer from '../lite-server.mjs';
-import liteTimer, { setTimeout as liteSetTimeout, clearTimeout as liteClearTimeout, setInterval as liteSetInterval, clearInterval as liteClearInterval } from '../lite-timer.mjs';
+import { liteProcess } from '../../lite-process.mjs';
+import { ProcessExitError } from '../../lite-process-exit-error.mjs';
+import { t_install as t_installGit } from '../../lite-cmd-git.mjs';
+import liteHttp from '../../lite-http.mjs';
+import liteServer from '../../lite-server.mjs';
+import liteTimer, { setTimeout as liteSetTimeout, clearTimeout as liteClearTimeout, setInterval as liteSetInterval, clearInterval as liteClearInterval } from '../../lite-timer.mjs';
 
 // 共享常量：系统本体文件与排除目录（真实磁盘）——各来源文件的 EXCLUDED 口径同值同名
 const selfFile = new URL(import.meta.url).pathname;
 const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));
-const REAL_ROOT = path.resolve(fileURLToPath(new URL('../../', import.meta.url)));
+const REAL_ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.url)));
 
 // ---------- lite-fs：真实 fs 对照（自 lite-fs.test.mjs 迁入） ----------
 
@@ -515,9 +515,9 @@ test('真实 child_process 对照：参数校验、输入流、暂停恢复与�
 
 /** 场景：独立测试进程观察 ref/unref 是否真正影响退出时机，而非只比较方法返回值。 */
 test('真实 child_process 对照：ref/unref 控制运行引用，unmock 释放引用', () => {
-  const childUrl = new URL('../lite-child_process.mjs', import.meta.url).href;
-  const fsUrl = new URL('../lite-fs.mjs', import.meta.url).href;
-  const mgrUrl = new URL('../lite-cmd-mgr.mjs', import.meta.url).href;
+  const childUrl = new URL('../../lite-child_process.mjs', import.meta.url).href;
+  const fsUrl = new URL('../../lite-fs.mjs', import.meta.url).href;
+  const mgrUrl = new URL('../../lite-cmd-mgr.mjs', import.meta.url).href;
   const driver = (memory, mode) => {
     const code = memory ? `
       import cp from ${JSON.stringify(childUrl)};

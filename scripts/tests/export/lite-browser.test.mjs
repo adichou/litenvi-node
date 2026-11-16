@@ -9,10 +9,10 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { t_nativeReferenceEnv } from './native-reference-env.mjs';
-import liteHttp from '../lite-http.mjs';
-import liteServer from '../lite-server.mjs';
-import liteBrowser from '../lite-browser.mjs';
+import { t_nativeReferenceEnv } from '../native-reference-env.mjs';
+import liteHttp from '../../lite-http.mjs';
+import liteServer from '../../lite-server.mjs';
+import liteBrowser from '../../lite-browser.mjs';
 
 /** 场景：软链接依赖拥有独立 Playwright 安装时，浏览器模块不重复初始化调用方的测试框架。 */
 test('独立安装：调用方已加载 @playwright/test 后仍可导入 lite-browser', () => {
@@ -32,7 +32,7 @@ test('独立安装：调用方已加载 @playwright/test 后仍可导入 lite-br
       const require = createRequire(${JSON.stringify(path.join(root, 'consumer.cjs'))});
       const { expect } = require('@playwright/test');
       const initiator = process.__pw_initiator__;
-      const { default: browser } = await import(${JSON.stringify(new URL('../lite-browser.mjs', import.meta.url).href)});
+      const { default: browser } = await import(${JSON.stringify(new URL('../../lite-browser.mjs', import.meta.url).href)});
       expect(typeof browser.open).toBe('function');
       assert.equal(process.__pw_initiator__, initiator, '浏览器模块不能再次初始化测试框架');
     `], { encoding: 'utf8', env: t_nativeReferenceEnv(), timeout: 30_000 });

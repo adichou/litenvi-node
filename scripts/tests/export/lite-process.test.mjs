@@ -8,13 +8,13 @@
 // 方法级写测试场景；语句中「输入」部分标记输入；断言按「预期 1/2/…」逐条注释。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import liteFs from '../lite-fs.mjs';
-import liteChildProcess from '../lite-child_process.mjs';
-import mgr from '../lite-cmd-mgr.mjs';
-import { liteProcess } from '../lite-process.mjs';
-import { ProcessExitError } from '../lite-process-exit-error.mjs';
-import { t_install as t_installOsCommands } from '../lite-cmd-os.mjs'; // cd/exit/kill 命令实现（chdir/exit/kill 转调依赖）
-import { t_install as t_installNodeCommands } from '../lite-cmd-node.mjs'; // execPath 用例内显式安装（未安装回落面先行断言）
+import liteFs from '../../lite-fs.mjs';
+import liteChildProcess from '../../lite-child_process.mjs';
+import mgr from '../../lite-cmd-mgr.mjs';
+import { liteProcess } from '../../lite-process.mjs';
+import { ProcessExitError } from '../../lite-process-exit-error.mjs';
+import { t_install as t_installOsCommands } from '../../lite-cmd-os.mjs'; // cd/exit/kill 命令实现（chdir/exit/kill 转调依赖）
+import { t_install as t_installNodeCommands } from '../../lite-cmd-node.mjs'; // execPath 用例内显式安装（未安装回落面先行断言）
 
 t_installOsCommands(); // 显式安装（导入不登记，mgr 不自动加载命令集）
 

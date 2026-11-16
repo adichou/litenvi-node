@@ -4,9 +4,9 @@
 // 用例注释格式：方法级写测试场景；语句中「输入」部分标记输入；断言按「预期 1/2/…」逐条注释。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import liteHttp from '../lite-http.mjs';
-import liteServer from '../lite-server.mjs';
-import { t_urlInjectionRequest } from './lite-http-helpers.mjs';
+import liteHttp from '../../lite-http.mjs';
+import liteServer from '../../lite-server.mjs';
+import { t_urlInjectionRequest } from '../lite-http-helpers.mjs';
 
 // probeHealth 形状的探活（回调式 http.request 消费门面）。
 function f_probe(port, path = '/api/health') {
@@ -189,7 +189,7 @@ test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离'
  * 门面与库内部相对导入必须是同一实例，否则注入规则会静默分裂（exports 变动先红）。 */
 test('包自引用 specifier 与相对导入共享同一单例', async () => {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
-  const selfRef = await import('../lite-http.mjs');
+  const selfRef = await import('../../lite-http.mjs');
   assert.equal(selfRef.default, liteHttp, '同一模块经不同 specifier 应共享同一实例');
 });
 

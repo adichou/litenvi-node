@@ -5,14 +5,14 @@
 // 用例注释格式：方法级写测试场景；语句中「输入」部分标记输入；断言按「预期 1/2/…」逐条注释。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import liteFs from '../lite-fs.mjs';
-import liteChildProcess from '../lite-child_process.mjs';
-import { liteProcess } from '../lite-process.mjs';
-import mgr from '../lite-cmd-mgr.mjs';
+import liteFs from '../../lite-fs.mjs';
+import liteChildProcess from '../../lite-child_process.mjs';
+import { liteProcess } from '../../lite-process.mjs';
+import mgr from '../../lite-cmd-mgr.mjs';
 // 命令集自测经显式 t_install() 安装（导入不登记，mgr 不再反向加载本模块，无 TDZ 约束）；
 // kill 信号用例以 node 脚本为目标子进程，一并安装
-import { t_commands, t_install } from '../lite-cmd-os.mjs';
-import { t_install as t_installNodeCommands } from '../lite-cmd-node.mjs';
+import { t_commands, t_install } from '../../lite-cmd-os.mjs';
+import { t_install as t_installNodeCommands } from '../../lite-cmd-node.mjs';
 
 const selfFile = new URL(import.meta.url).pathname;
 const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));

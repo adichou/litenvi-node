@@ -7,17 +7,17 @@
 //「输入」部分标记输入；断言按「预期 1/2/…」逐条注释。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import mgr from '../lite-cmd-mgr.mjs';
-import liteFs from '../lite-fs.mjs';
-import liteChildProcess from '../lite-child_process.mjs';
+import mgr from '../../lite-cmd-mgr.mjs';
+import liteFs from '../../lite-fs.mjs';
+import liteChildProcess from '../../lite-child_process.mjs';
 // 系统命令集显式安装（t_install，导入不登记——mgr 不自动加载命令集）；命名空间枚举经
 // 动态 import 取用（no-restricted-syntax 禁静态通配符导入，导出面对账属命名空间机制本体）
-import { t_install as t_installNodeCommands } from '../lite-cmd-node.mjs';
-import { t_install as t_installOsCommands } from '../lite-cmd-os.mjs';
+import { t_install as t_installNodeCommands } from '../../lite-cmd-node.mjs';
+import { t_install as t_installOsCommands } from '../../lite-cmd-os.mjs';
 t_installNodeCommands();
 t_installOsCommands();
-import liteHttp from '../lite-http.mjs';
-import liteServer from '../lite-server.mjs';
+import liteHttp from '../../lite-http.mjs';
+import liteServer from '../../lite-server.mjs';
 
 const selfFile = new URL(import.meta.url).pathname;
 const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));
@@ -55,7 +55,7 @@ test('晚安装落卷：导入 Git 无副作用，t_install 后命令可执行',
     assert.equal(liteChildProcess.spawnSync('/bin/echo', ['install']).status, 0, '公共执行入口应触发系统卷安装');
     assert.equal(mgr.command('git'), null, '导入前 Git 尚未登记');
     assert.equal(liteChildProcess.spawnSync('git').error?.code, 'ENOENT', '命令文件缺失时不可执行');
-    const { t_install } = await import('../lite-cmd-git.mjs');
+    const { t_install } = await import('../../lite-cmd-git.mjs');
     assert.equal(mgr.command('git'), null, '仅导入 Git 不应登记命令');
     assert.equal(liteFs.existsSync('/mock-cmd/usr/bin/git'), false, '仅导入 Git 不应创建命令文件');
     assert.equal(liteChildProcess.spawnSync('git').error?.code, 'ENOENT', '导入后未显式安装仍不可执行');
@@ -74,7 +74,7 @@ test('方法隔离：公共接口、内部名称与私有实现边界', async ()
   // 输入：读取各模块的公共门面与导出列表，不执行内部协作方法
   //（导出面对账需命名空间本身，动态 import 与静态导入共享同一模块实例）
   const [nodeModule, osModule, processModule] = await Promise.all([
-    import('../lite-cmd-node.mjs'), import('../lite-cmd-os.mjs'), import('../lite-process.mjs'),
+    import('../../lite-cmd-node.mjs'), import('../../lite-cmd-os.mjs'), import('../../lite-process.mjs'),
   ]);
   for (const [owner, names] of [[mgr, ['defineCommand', 'resolve', 'install', 'f_install', '_defineCommand', '_resolve']],
     [liteChildProcess, ['signal', '_signal']], [liteServer, ['handle', 'listening', 'liveRequests', '_handle', 'f_liveRequests']],
@@ -527,7 +527,7 @@ test('register 校验：裸名/impl/先 mock lite-fs', async () => {
  * 登记表与库内部相对导入必须是同一实例，否则命令注册会静默分裂（exports 变动先红）。 */
 test('包自引用 specifier 与相对导入共享同一单例', async () => {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
-  const selfRef = await import('../lite-cmd-mgr.mjs');
+  const selfRef = await import('../../lite-cmd-mgr.mjs');
   assert.equal(selfRef.default, mgr, '同一模块经不同 specifier 应共享同一实例');
 });
 

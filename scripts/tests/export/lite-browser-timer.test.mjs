@@ -2,17 +2,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import timer from '../lite-browser-timer.mjs';
-import liteBrowser from '../lite-browser.mjs';
-import liteHttp from '../lite-http.mjs';
-import liteServer from '../lite-server.mjs';
+import timer from '../../lite-browser-timer.mjs';
+import liteBrowser from '../../lite-browser.mjs';
+import liteHttp from '../../lite-http.mjs';
+import liteServer from '../../lite-server.mjs';
 
 async function f_withTimerPage(run, setupScript = '') {
   liteHttp.t_mock(); liteServer.t_mock();
   const server = liteServer.createServer((req, res) => {
     if (req.url === '/timer.mjs') {
       res.writeHead(200, { 'Content-Type': 'text/javascript' });
-      res.end(fs.readFileSync(new URL('../lite-browser-timer.mjs', import.meta.url)));
+      res.end(fs.readFileSync(new URL('../../lite-browser-timer.mjs', import.meta.url)));
     } else if (req.url === '/slow') res.end('response-body');
     else {
       res.writeHead(200, { 'Content-Type': 'text/html' });
