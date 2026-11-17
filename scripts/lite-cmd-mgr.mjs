@@ -21,6 +21,9 @@
 // 门、同步面无法阻塞事件循环直接回包）；stderr 附随失败包 { status: exit, stdout: '', stderr }；
 // once 命中即毁。命令对象的 t_inject(fault) / t_onRun(handler) / t_impl() 仅供测试；i_takeFault() / i_runSync()
 // 为内部协作方法，i_ 前缀仅表示约定。异步等待与分派由 lite-child_process 统一处理。
+// t_onRun(handler) 的 handler(call, runBuiltin) 同时覆盖同步和异步命令；undefined 回落，结果替换。
+// 异步入口允许 Promise，runBuiltin() 对异步实现返回聚合输出的 Promise、同步实现仍返回对象；
+// 同步入口明确拒绝 Promise。
 // command(nameOrPath) 为配置/转调寻址：按与 i_resolve
 // 相同的名字映射查注册表，但不要求文件已装（onRun/inject 可在世界建立前配置，lite-process
 // 的 chdir/exit/kill 转调同口径）。命令条目携带通用接口：execPath（可执行路径）与当前执行
@@ -120,7 +123,7 @@ function f_createEntry(p, impl) {
         // 规范化 argv[0]），只依赖本通用接口，不依赖任何具体命令集模块。
         execPath: p,
         i_impl: impl,
-        i_script: null, // onRun 世界脚本钩子，由同步入口统一包裹内置实现
+        i_script: null, // onRun 世界脚本钩子，分别由同步入口与异步分派层包裹内置实现
         // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
         t_inject(fault) {
             f_validateFault(fault, p);
@@ -174,6 +177,10 @@ function f_createEntry(p, impl) {
                     return builtinResult;
                 };
                 const out = entry.i_script(call, f_runBuiltin);
+                if (out && typeof out.then === 'function') {
+                    Promise.resolve(out).catch(() => {}); // 已明确拒绝；消费可能的拒绝，避免泄漏未处理异常。
+                    throw new TypeError('同步命令钩子不能返回 Promise；请通过异步子进程入口执行');
+                }
                 if (out !== undefined)
                     return { status: 0, stdout: '', stderr: '', ...(out || {}) };
                 return f_runBuiltin(); // 钩子未命中（undefined）：回落内置真实语义

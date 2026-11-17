@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import liteChildProcess from '../../lite-child_process.mjs';
 import mgr from '../../lite-cmd-mgr.mjs';
+import liteTimer from '../../lite-timer.mjs';
 import liteFs from '../../lite-fs.mjs';
 import { t_install as t_installGit } from '../../lite-cmd-git.mjs';
 import { t_install as t_installNodeCommands } from '../../lite-cmd-node.mjs';
@@ -24,6 +25,219 @@ t_installOsCommands();
 const selfFile = new URL(import.meta.url).pathname;
 const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));
 t_installGit();
+
+/** 场景：异步 Node 命令可由钩子直接提供结果，无须存在可执行的测试源码。 */
+test('异步钩子：Node 测试命令替换、受控等待与退出结果', async () => {
+    liteFs.t_mock({ exclude: [EXCLUDED] });
+    liteChildProcess.t_mock();
+    let release;
+    let entered;
+    const ready = new Promise(resolve => { entered = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    const entry = mgr.command('node');
+    try {
+        // 输入：不存在的源码路径；钩子仅提供外部命令的原始输出。
+        let observed;
+        entry.t_onRun(async call => {
+            observed = call;
+            entered();
+            await gate;
+            return { status: 3, stdout: 'TAP version 13\nnot ok 1 - 示例\n', stderr: '模拟诊断\n' };
+        });
+        const child = liteChildProcess.spawn('node', ['--test', '/memory/missing.test.mjs']);
+        const output = [], errors = [], events = [];
+        child.stdout.on('data', chunk => output.push(chunk));
+        child.stderr.on('data', chunk => errors.push(chunk));
+        child.on('exit', () => events.push('exit'));
+        child.on('close', () => events.push('close'));
+        const closed = liteChildProcess.waitForClose(child);
+        await new Promise(resolve => queueMicrotask(resolve));
+        assert.ok(observed, '异步 Node 分派必须先进入命令钩子');
+        await ready;
+        // 预期 1：闸门前只进入钩子，不执行 Node 或提前完成。
+        assert.deepEqual(observed.argv, ['--test', '/memory/missing.test.mjs'], '钩子应收到原始参数');
+        assert.equal(child.exitCode, null, '放行前命令应保持运行');
+        assert.equal(output.length, 0, '放行前不应输出预置回包');
+        release();
+        // 预期 2：通过公共子进程事件与管道返回原始回包。
+        assert.deepEqual(await closed, { code: 3, signal: null }, '应保留钩子退出码');
+        assert.equal(Buffer.concat(output).toString(), 'TAP version 13\nnot ok 1 - 示例\n', '应返回钩子的 TAP');
+        assert.equal(Buffer.concat(errors).toString(), '模拟诊断\n', '应返回钩子标准错误');
+        assert.deepEqual(events, ['exit', 'close'], '退出和关闭事件应各发生一次且顺序正确');
+        entry.t_onRun(() => undefined);
+        const version = await new Promise(resolve => liteChildProcess.execFile('node', ['--version'], (error, stdout) => resolve({ error, stdout })));
+        assert.equal(version.error, null, '未匹配的 Node 调用应回落内置实现');
+        assert.equal(version.stdout, `${process.version}\n`, '回落应返回内置 Node 的版本输出');
+    } finally {
+        release?.();
+        entry.t_onRun(null);
+        liteChildProcess.t_unmock();
+        liteFs.t_unmock();
+    }
+});
+
+/** 场景：异步钩子回落内置实现、等待并包装结果时只执行一次，异常不会悬挂子进程。 */
+test('异步钩子：内置回落、惰性包装和错误结算', async () => {
+    liteFs.t_mock({ exclude: [EXCLUDED] });
+    liteChildProcess.t_mock();
+    try {
+        let runs = 0;
+        const entry = mgr.t_defineUserCommand('hook-async', {
+            i_run(_args, _ctx, child) {
+                runs += 1;
+                queueMicrotask(() => {
+                    child.stdout.write('builtin\n');
+                    child.emit('exit', 0, null);
+                    child.emit('close', 0, null);
+                });
+            },
+        });
+        // 输入：未匹配时返回 undefined；匹配时等待 runBuiltin 后改写输出。
+        entry.t_onRun(() => undefined);
+        const fallback = await new Promise(resolve => liteChildProcess.execFile('hook-async', (error, stdout) => resolve({ error, stdout })));
+        assert.equal(fallback.error, null, '未匹配应执行内置实现');
+        assert.equal(fallback.stdout, 'builtin\n', '回落应保留原始输出');
+        entry.t_onRun(async (_call, runBuiltin) => {
+            const first = runBuiltin();
+            const second = runBuiltin();
+            const result = await first;
+            await second;
+            return { ...result, stdout: `wrapped:${result.stdout}` };
+        });
+        const wrapped = await new Promise(resolve => liteChildProcess.execFile('hook-async', (error, stdout) => resolve({ error, stdout })));
+        assert.equal(wrapped.stdout, 'wrapped:builtin\n', '包装应只投递改写后的输出');
+        assert.equal(runs, 2, '重复调用 runBuiltin 不应重复执行命令');
+        const syncEntry = mgr.t_defineUserCommand('hook-sync-wrapper', {
+            i_runSync: () => ({ status: 5, stdout: 'sync\n' }),
+        });
+        syncEntry.t_onRun((_call, runBuiltin) => ({ ...runBuiltin(), stderr: '同步包装\n' }));
+        const syncWrapped = await new Promise(resolve => liteChildProcess.execFile('hook-sync-wrapper', (error, stdout, stderr) => resolve({ error, stdout, stderr })));
+        assert.equal(syncWrapped.error?.code, 5, '异步执行同步命令时应保留既有同步包装的退出码');
+        assert.equal(syncWrapped.stdout, 'sync\n', '同步包装仍应直接取得内置结果对象');
+        assert.equal(syncWrapped.stderr, '同步包装\n', '同步包装应保留新增标准错误');
+        // 预期：拒绝 Promise 和同步抛错均以失败码与标准错误结算。
+        for (const handler of [() => { throw new Error('hook-thrown'); }, () => Promise.reject(new Error('hook-rejected'))]) {
+            entry.t_onRun(handler);
+            const result = await new Promise(resolve => liteChildProcess.execFile('hook-async', (error, stdout, stderr) => resolve({ error, stdout, stderr })));
+            assert.equal(result.error?.code, 1, '钩子错误应结算为非零退出');
+            assert.match(result.stderr, /hook-(thrown|rejected)/, '标准错误应保留原始错误');
+            assert.equal(result.stdout, '', '错误不应触发内置回落');
+        }
+    } finally {
+        liteChildProcess.t_unmock();
+        liteFs.t_unmock();
+    }
+});
+
+/** 场景：故障优先于异步钩子，命令取消或世界卸载后不投递迟到结果。 */
+test('异步钩子：故障优先与生命周期隔离', async () => {
+    liteFs.t_mock({ exclude: [EXCLUDED] });
+    liteChildProcess.t_mock();
+    const releases = [];
+    try {
+        let hookRuns = 0, builtinRuns = 0;
+        const entry = mgr.t_defineUserCommand('hook-lifecycle', {
+            i_runSync: () => { builtinRuns += 1; return { status: 0 }; },
+        });
+        entry.t_onRun(() => { hookRuns += 1; return { stdout: 'hook\n' }; });
+        entry.t_inject({ exit: 9, once: true });
+        assert.deepEqual(await liteChildProcess.waitForClose(liteChildProcess.spawn('hook-lifecycle')), { code: 9, signal: null }, '故障应先返回');
+        assert.equal(hookRuns, 0, '故障命中时不得执行钩子');
+        for (const mode of ['kill', 'unmock']) {
+            for (const outcome of ['result', 'fallback', 'reject', 'runBuiltin']) {
+                liteChildProcess.t_mock();
+                let entered;
+                const ready = new Promise(resolve => { entered = resolve; });
+                let release;
+                const gate = new Promise(resolve => { release = resolve; releases.push(resolve); });
+                entry.t_onRun(async (_call, runBuiltin) => {
+                    entered();
+                    await gate;
+                    if (outcome === 'fallback') return undefined;
+                    if (outcome === 'reject') throw new Error('迟到错误');
+                    if (outcome === 'runBuiltin') return runBuiltin();
+                    return { stdout: 'late\n' };
+                });
+                const child = liteChildProcess.spawn('hook-lifecycle');
+                const chunks = [], exits = [];
+                child.stdout.on('data', chunk => chunks.push(chunk));
+                child.on('exit', (code, signal) => exits.push({ code, signal }));
+                await ready;
+                if (mode === 'kill') {
+                    const closed = liteChildProcess.waitForClose(child);
+                    child.kill();
+                    assert.deepEqual(await closed, { code: null, signal: 'SIGTERM' }, '取消应按信号完成');
+                } else liteChildProcess.t_unmock();
+                release();
+                await new Promise(resolve => setImmediate(resolve));
+                assert.equal(chunks.length, 0, '取消或卸载后不得投递迟到输出');
+                assert.equal(exits.length, mode === 'kill' ? 1 : 0, '迟到回包不得补发退出事件');
+                assert.equal(builtinRuns, 0, '取消或卸载后不得启动迟到的内置执行');
+            }
+        }
+    } finally {
+        for (const release of releases) release();
+        liteChildProcess.t_unmock();
+        liteFs.t_unmock();
+    }
+});
+
+/** 场景：钩子等待内置异步执行时，取消或卸载仍通知内置资源清理且不投递聚合输出。 */
+test('异步钩子：包装内置命令期间的资源清理', async () => {
+    liteFs.t_mock({ exclude: [EXCLUDED] });
+    try {
+        for (const mode of ['kill', 'unmock']) {
+            liteChildProcess.t_mock();
+            let entered, exitCount = 0, disposedCount = 0;
+            const ready = new Promise(resolve => { entered = resolve; });
+            const entry = mgr.t_defineUserCommand('hook-running-builtin', {
+                i_run(_args, ctx, child) {
+                    child.stdout.write('尚未完成的输出\n');
+                    let disposed = false;
+                    // 私有：与 Node 命令相同，退出通知和世界卸载共用幂等的资源清理。
+                    const f_dispose = () => { if (!disposed) { disposed = true; disposedCount += 1; } };
+                    child.once('exit', () => { exitCount += 1; f_dispose(); });
+                    ctx.onDispose(f_dispose);
+                    entered();
+                },
+            });
+            entry.t_onRun((_call, runBuiltin) => runBuiltin());
+            const child = liteChildProcess.spawn('hook-running-builtin');
+            const output = [];
+            child.stdout.on('data', chunk => output.push(chunk));
+            await ready;
+            if (mode === 'kill') {
+                const closed = liteChildProcess.waitForClose(child);
+                child.kill();
+                assert.deepEqual(await closed, { code: null, signal: 'SIGTERM' }, '包装期间仍应按取消信号退出');
+                assert.equal(exitCount, 1, '取消必须通知内置实现退出清理');
+            }
+            liteChildProcess.t_unmock();
+            await new Promise(resolve => setImmediate(resolve));
+            assert.equal(disposedCount, 1, '卸载应恰好执行一次内置资源清理');
+            assert.equal(output.length, 0, '未完成的内置输出不得在取消或卸载后补发');
+        }
+    } finally {
+        liteChildProcess.t_unmock();
+        liteFs.t_unmock();
+    }
+});
+
+/** 场景：同步调用明确拒绝异步钩子，不能把 Promise 当作空成功结果。 */
+test('同步钩子：拒绝 Promise 结果', () => {
+    liteFs.t_mock({ exclude: [EXCLUDED] });
+    liteChildProcess.t_mock();
+    try {
+        const entry = mgr.t_defineUserCommand('hook-sync-promise', { i_runSync: () => ({ status: 0 }) });
+        entry.t_onRun(async () => ({ stdout: 'invalid\n' }));
+        const result = liteChildProcess.spawnSync('hook-sync-promise');
+        assert.equal(result.status, 1, '同步入口不能将 Promise 当作成功回包');
+        assert.match(String(result.stderr), /同步.*Promise/, '错误应明确指出同步钩子不支持 Promise');
+    } finally {
+        liteChildProcess.t_unmock();
+        liteFs.t_unmock();
+    }
+});
 
 /** 场景：所有命令形态的异步执行都先等待故障闸门，放行或拒绝后按配置退出。 */
 test('异步故障统一调度：Git/npm/node/OS 与用户命令等待同一 wait 规则', async () => {
@@ -634,6 +848,9 @@ test('嵌套 exec：Node 入口复用内存命令，Promise.child 与回包保�
 test('exec 资源清理：unmock 取消超时与在途命令，不再触发回调', async () => {
   for (const method of ['exec', 'execFile']) {
     const done = f_setupExecReference();
+    liteChildProcess.t_unmock();
+    liteTimer.t_mock({ now: 0 });
+    liteChildProcess.t_mock({ timers: liteTimer });
     let callbacks = 0, exits = 0;
     try {
       // 输入：启动长驻虚拟 Node，卸载发生在超时之前
@@ -642,10 +859,10 @@ test('exec 资源清理：unmock 取消超时与在途命令，不再触发回�
       child.on('exit', () => { exits++; });
       await new Promise(resolve => setImmediate(resolve));
       liteChildProcess.t_unmock();
-      await new Promise(resolve => setTimeout(resolve, 35));
+      await liteTimer.t_advanceMs(35);
       // 预期 1：卸载后没有超时、终态或回调活动
       assert.deepEqual({ callbacks, exits }, { callbacks: 0, exits: 0 }, `${method} 卸载后不得投递迟到事件`);
-    } finally { done(); }
+    } finally { done(); liteTimer.t_unmock(); }
   }
 });
 

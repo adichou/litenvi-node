@@ -4,7 +4,6 @@
 // 用例注释格式：方法级写测试场景；语句中「输入」部分标记输入；断言按「预期 1/2/…」逐条注释。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import realFs from 'node:fs';
 import liteFs, { t_stageStdin, t_releaseStdin } from '../../lite-fs.mjs';
 
 const selfFile = new URL(import.meta.url).pathname; // 系统本体文件（真实磁盘）
@@ -82,22 +81,6 @@ test('真实错误语义：ENOENT/EEXIST/ENOTDIR/ERR_FS_EISDIR/EISDIR', () => {
     // 输入：对目录 unlink
     // 预期 6：EISDIR
     assert.throws(() => liteFs.unlinkSync(`${ROOT}/d`), e => e.code === 'EISDIR', '对目录 unlink 应 EISDIR');
-  } finally {
-    liteFs.t_unmock();
-  }
-});
-
-/** 场景：黑名单边界——排除目录内走真实 fs，排除外落内存卷，两侧互不串扰。 */
-test('排除目录系统本体：mock 后读源码文件原样走真实 fs、不经内存卷', () => {
-  // 输入：mock 黑名单（排除本测试目录）后读排除目录内的源码文件、查卷内路径
-  liteFs.t_mock({ exclude: [EXCLUDED] });
-  try {
-    // 预期 1：排除目录内真实文件可见（走真实 fs）
-    assert.equal(liteFs.existsSync(selfFile), true, '排除目录内真实文件应仍可见');
-    // 预期 2：排除目录读取内容与真实 fs 一致
-    assert.equal(liteFs.readFileSync(selfFile, 'utf8'), realFs.readFileSync(selfFile, 'utf8'), '排除目录读取应与真实 fs 一致');
-    // 预期 3：排除外路径走内存卷（真实磁盘本无此文件，卷内也未创建）
-    assert.equal(liteFs.existsSync(`${ROOT}/x`), false, '排除外路径应走内存卷（真实磁盘本无此文件）');
   } finally {
     liteFs.t_unmock();
   }

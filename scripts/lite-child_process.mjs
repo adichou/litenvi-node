@@ -5,6 +5,11 @@
 // 到期按 killSignal（缺省 SIGTERM）终止——exit/close 带信号、无 error 事件（对齐原生）；
 // spawnSync 按 encoding 返回 Buffer 或字符串，并提供 status/signal/output/pid。自然退出与
 // 信号退出均移除 PID。
+// t_onRun 在内置执行前拦截异步命令，可返回原始结果或 Promise；undefined 回落内置。
+// runBuiltin() 惰性且仅执行一次：异步实现返回聚合输出的 Promise，同步实现仍返回结果对象。
+// 无钩子时保持原有流式执行。
+// t_mock({ timers }) 可注入仅控制 timeout 的独立时钟，默认原生，不修改宿主全局。
+// 故障优先于钩子；取消或卸载世界后丢弃迟到回包与错误。
 // 命令实现通过 lite-process 的 i_commandContext 获取进程能力；不在命令模块维护子进程账本。
 // 退出意图类型直接引用 lite-process-exit-error，与命令实现共用同一类型。
 import {
@@ -24,8 +29,61 @@ import mgr from './lite-cmd-mgr.mjs';
 import { i_commandContext } from './lite-process.mjs';
 import { ProcessExitError } from './lite-process-exit-error.mjs';
 // 运行态自身的调度不计入虚拟 Node 脚本的定时器。
-const { setImmediate: f_setImmediate, setInterval: f_setInterval, clearInterval: f_clearInterval, setTimeout: f_setTimeout, clearTimeout: f_clearTimeout } = timers;
+const { setImmediate: f_setImmediate, setInterval: f_setInterval, clearInterval: f_clearInterval, } = timers;
+let f_timeoutTimers = timers;
+// 私有：命令超时可显式注入独立时钟，不安装或改写宿主全局定时器。
+const f_setTimeout = (...args) => f_timeoutTimers.setTimeout(...args);
+// 私有：清理必须使用与注册相同的时钟，卸载世界后再恢复原生。
+const f_clearTimeout = (...args) => f_timeoutTimers.clearTimeout(...args);
 const f_signals = constants.signals;
+
+// 私有：钩子显式调用内置实现时聚合输出，供包装后一次性投递；无钩子路径不经过本函数。
+function f_collectCommand(cmd, args, ctx, io) {
+    if (typeof cmd.i_impl.i_run !== 'function')
+        return cmd.i_impl.i_runSync([...args], ctx);
+    return new Promise((resolve, reject) => {
+        const capture = new EventEmitter();
+        Object.assign(capture, { stdout: new PassThrough(), stderr: new PassThrough() });
+        capture.stdio = [io.stdin, capture.stdout, capture.stderr];
+        const output = [], errors = [];
+        capture.stdout.on('data', chunk => output.push(Buffer.from(chunk)));
+        capture.stderr.on('data', chunk => errors.push(Buffer.from(chunk)));
+        capture.once('error', reject);
+        capture.once('close', (status, signal) => resolve({ status, signal,
+            stdout: Buffer.concat(output), stderr: Buffer.concat(errors) }));
+        // 私有：外层取消同样通知内置实现，使其退出清理逻辑与普通命令一致。
+        const f_cancel = (code, signal) => {
+            capture.emit('exit', code, signal);
+            capture.emit('close', code, signal);
+        };
+        io.once('exit', f_cancel);
+        ctx.onDispose?.(() => f_cancel(null, 'SIGTERM'));
+        capture.once('close', () => io.removeListener('exit', f_cancel));
+        const child = new Proxy(io, { get(target, key) {
+            const owner = key in capture ? capture : target;
+            const value = owner[key];
+            return typeof value === 'function' ? value.bind(owner) : value;
+        } });
+        try { cmd.i_impl.i_run([...args], ctx, child); } catch (error) { reject(error); }
+    });
+}
+
+// 私有：异步钩子共享同步钩子的回落语义，但允许等待和包装异步内置结果。
+async function f_runHook(cmd, args, ctx, io, isActive) {
+    let builtin, builtinRan = false;
+    // 私有：同次命令只执行一次内置实现，并立即安装拒绝处理，避免钩子提前返回时泄漏异常。
+    const f_runBuiltin = () => {
+        if (!isActive()) return { status: null, signal: io.signalCode || 'SIGTERM', stdout: '', stderr: '' };
+        if (!builtinRan) {
+            builtinRan = true;
+            builtin = f_collectCommand(cmd, args, ctx, io);
+            if (builtin && typeof builtin.then === 'function') builtin.catch(() => {});
+        }
+        return builtin;
+    };
+    const result = await cmd.i_script({ argv: [...args], options: { ...ctx.options } }, f_runBuiltin);
+    return result === undefined ? f_runBuiltin() : result;
+}
 
 // 启动失败沿用 Node 的系统错误字段，异步 spawn 通过 error 事件投递。
 // 私有方法：仅在本文件实现中使用，不导出。
@@ -666,11 +724,29 @@ const f_createMemorySpawn = () => {
                 }
                 // 分派前进入 mgr 当前执行环境（通用接口）：实现内部（含异步续体）的
                 // lite-process.argv 视图读到本次执行的规范化 argv；嵌套 spawn 内层覆盖外层。
-                if (typeof cmd.i_impl.i_run === 'function') mgr.i_runAsCurrent(cmd, args, () => cmd.i_impl.i_run([...args], {
+                const context = {
                     ...i_commandContext(contextOptions),
                     onDispose: cleanup => { state.cleanups.add(cleanup); },
                     onSignal: handler => { state.onSignal = handler; },
-                }, io));
+                };
+                if (cmd.i_script) {
+                    // 私有：取消、退出及世界卸载同时约束回包和迟到的内置回落。
+                    const f_isActive = () => !disposed && children.has(child.pid) && !state.terminating;
+                    mgr.i_runAsCurrent(cmd, args, () => f_runHook(cmd, args, context, io, f_isActive)).then(result => {
+                        if (!f_isActive()) return;
+                        if (result?.stdout) io.stdout.write(result.stdout);
+                        if (result?.stderr) io.stderr.write(result.stderr);
+                        f_finish(child, result?.status ?? 0, result?.signal ?? null);
+                    }, error => {
+                        if (!f_isActive()) return;
+                        if (error instanceof ProcessExitError) f_finish(child, error.exitCode);
+                        else {
+                            io.stderr.write(`${error.stack || error}\n`);
+                            f_finish(child, 1);
+                        }
+                    });
+                }
+                else if (typeof cmd.i_impl.i_run === 'function') mgr.i_runAsCurrent(cmd, args, () => cmd.i_impl.i_run([...args], context, io));
                 else if (typeof cmd.i_impl.i_runSync === 'function') {
                     const result = mgr.i_runAsCurrent(cmd, args, () => cmd.i_runSync(args, i_commandContext(contextOptions), null));
                     if (result.stdout) io.stdout.write(result.stdout);
@@ -760,10 +836,15 @@ const liteChildProcess = {
     execFileSync(...args) { return f_memory ? f_memory.execFileSync(...args) : realExecFileSync(...args); },
     // 设置内存实现；返回公共门面，不暴露私有运行态
     // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
-    t_mock() { f_memory ??= f_createMemorySpawn(); return liteChildProcess; },
+    t_mock(options = {}) {
+        if (options.timers && (typeof options.timers.setTimeout !== 'function' || typeof options.timers.clearTimeout !== 'function')) throw new TypeError('子进程超时钟必须提供 setTimeout/clearTimeout');
+        if (f_memory && options.timers && options.timers !== f_timeoutTimers) throw new Error('切换子进程超时钟前必须先卸载世界');
+        if (!f_memory) { f_timeoutTimers = options.timers || timers; f_memory = f_createMemorySpawn(); }
+        return liteChildProcess;
+    },
     // 移除内存实现，回到真实 spawn；调用记录与在册子进程随实例一并丢弃
     // 测试专用方法：仅测试代码可引用或调用，生产代码禁止使用。
-    t_unmock() { f_memory?.f_dispose(); f_memory = null; },
+    t_unmock() { f_memory?.f_dispose(); f_memory = null; f_timeoutTimers = timers; },
     // 等待子进程 close 并取终态 { code, signal }——真实与内存子进程同口径（一次性事件 →
     // 可 await 的值的收敛包装，替代消费侧手写 new Promise + on('close')）；spawn 失败
     //（error 事件，如命令不存在）按拒绝收场。先取 Promise 再触发动作，监听时序才有保证

@@ -47,6 +47,10 @@
 
 `mgr.command(nameOrPath)` 查询已登记的命令句柄；Git 须先调用 `t_install()`，之后可在内存卷建立前配置 `t_onRun/t_inject`；`mgr.i_resolve(nameOrPath)` 是包内执行寻址接口，要求命令文件存在，首次可惰性安装系统命令。命令对象的 `t_onRun/t_inject` 为测试专用配置接口，不再提供 `mgr.inject`；`i_takeFault/i_runSync` 供包内执行层协作；测试通过上述 child_process 公共接口触发执行。
 
+`command.t_onRun((call, runBuiltin) => result)` 同时拦截同步和异步执行。`call` 包含 `argv` 与 `options`；返回 `{ status, stdout, stderr, signal? }` 替换命令结果，返回 `undefined` 回落内置实现。异步入口允许钩子返回 Promise，可用显式闸门控制完成时机；同步入口遇到 Promise 明确失败。`runBuiltin()` 惰性且同次执行只运行一次：同步实现返回结果对象，异步实现返回聚合输出的 Promise，钩子可等待后改写结果。只有存在钩子时才聚合异步内置输出，无钩子时保留流式执行。故障注入先于钩子；取消或卸载世界后不会再投递迟到结果。用完须 `t_onRun(null)` 清理。
+
+例如，页面只验证如何处理外部 Node 测试结果时，可以对 `node --test` 设置钩子返回 TAP 和退出码，无须给模块加载器提供真实测试源码。此时只验证消费命令输出的业务行为，不代表实际执行了 Node 测试或测得覆盖率；命令自身的执行能力仍由库的独立测试验证。
+
 Git 命令需要显式安装：`import { t_install } from 'litenvi-node/lite-cmd-git.mjs'; t_install();`。仅导入模块不会登记 Git，也不会创建 Git 命令文件；未安装时内存子进程执行 Git 返回 `ENOENT`。`t_install()` 可在建立内存卷之前或之后调用：卷尚未建立时先登记，执行命令时由管理器安装命令文件；系统卷已存在时立即补齐 Git 文件。重复调用保持幂等，保留已配置的脚本钩子和故障规则。
 
 Git 的故障注入可指定子命令，例如 `mgr.command('git').t_inject({ subcommand: 'add', exit: 128, stderr: 'index.lock', once: true })`。规则只对指定子命令生效；支持跳过 `-c <配置>`、`-C <目录>`、`--no-optional-locks`、`--no-pager` 和 `--literal-pathspecs` 全局选项。规则按注入顺序选取首个匹配项，`once` 仅在命中时消费；未指定 `subcommand` 时仍匹配该命令的所有调用。同步与异步执行均遵循此规则，返回的函数可解除故障。
@@ -160,3 +164,8 @@ timer.t_unmock();
 `t_mock()` 返回公共门面，私有运行态不作为返回值暴露。`isMocked()` 是公开的状态查询；`liteFs.markPersistent()` 是公开的持久目录配置，均允许测试使用。命令实现（含 `t_defineUserCommand` 的实现对象）统一声明 `i_run/i_runSync`，仅供包内执行层分派，不保留 `run/runSync` 别名。外部调用方应使用 `child_process` 的 `spawn/spawnSync`、`exec/execSync` 或 `execFile/execFileSync` 执行命令；`mgr.command(...)` 同时供包内执行层查询命令；测试通过该句柄配置 `t_inject/t_onRun`。
 
 `lite-cmd-mgr` 的 `f_install()` 仅在本文件内使用，不挂到默认导出对象；命令文件由公共执行入口触发惰性安装，测试不直接调用安装方法。
+
+
+测试可通过 `liteChildProcess.t_mock({ timers: liteTimer })` 给命令 timeout 注入独立时钟。仅 setTimeout/clearTimeout 控制的超时边界使用该时钟，I/O 与进程引用仍使用原生调度；先卸载旧世界再切换，t_unmock 清理在途超时后恢复原生。用于验证取消超时与卸载时，不需要用真实毫秒数抢先后顺序。
+
+内存服务的公共请求账本补充 `aborted`（弃连已传播）和 `finished`（管线已结算）观测字段。客户端弃连时，服务端闸门放行后仍结算内部 Promise，不补发响应。t_unmock 关停实际 socket 后发出 close，测试可等待真实关闭事件，再独立检查端口拒连。

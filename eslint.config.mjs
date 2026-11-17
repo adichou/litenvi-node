@@ -4,15 +4,8 @@
 // - interfaceReturns: [{ module: 'scripts/lite-cmd-mgr.mjs', member: 'default.command' }]
 //   （mgr.command 明确返回命令接口句柄，其成员继续按前缀检查；其他函数返回的数据不继承
 //   接口访问级别）
-// - entry: []（纯库设防：测试直启生产脚本即报）
-// - entryExceptionFiles: ['lite-cmd-node.test.mjs', 'lite-cmd-os.test.mjs']
-//   （被测对象就是命令机制本体：node --test 运行器参数向量、test/cd 无脚本 REPL 形态）
-// - badTestExceptionFiles: ['scripts/tests/lite-timer.test.mjs', 'scripts/tests/lite-server.test.mjs',
-//   'scripts/tests/lite-child_process.test.mjs', 'scripts/tests/lite-browser-timer.test.mjs',
-//   'scripts/tests/native-reference.test.mjs']
-//   （固定睡眠属内在真实时序：timer 透传真实定时器、server 真实 socket 观察窗、
-//   child_process 真实 timeout 负空间、browser-timer gate 真实时间窗、native-reference
-//   真实子进程信号/盘上时序观察窗）
+// - 测试入口来自 package.json exports：本包公开子进程 API 可在 export 中自测；
+//   原生对照的进程调用通过 exceptionFilesAllowModules 按文件、模块与理由登记。
 import pluginPackageJson from 'eslint-plugin-package-json';
 import { createConfig } from 'atb-eslint-plugin/config.mjs';
 
@@ -22,6 +15,15 @@ export default createConfig({
   // 禁令；本地来源（file: 的 atb-eslint-plugin 平级仓）不检——开发分支联调形态，main 分支
   // 守护归交付流程（看板 REQ-20261116-003）。
   packageJson: { parser: pluginPackageJson.configs.recommended.languageOptions.parser },
-  // 纯库无 UI 面：uiTest 关闭（测试三分区退化为 bin/export，ui/ 不设区）。
+  // 纯库无 UI 面：uiTest 关闭，保留 bin/export/config 分区。
   uiTest: { enabled: false },
+  // 这些用例的验证对象就是原生接口身份、真实回环 socket 或原生对照结果，不能改走内存响应。
+  // 仅登记具体测试文件；其他门面测试继续遵守环境模块导入限制（黑名单走工厂缺省环境组）。
+  exceptionFilesAllowModules: [
+    {
+      file: 'export/native-reference.test.mjs',
+      modules: ['node:child_process', 'node:fs', 'node:http'],
+      reason: '对照原生进程、文件和网络行为，用独立进程隔离真实 IO',
+    },
+  ],
 });

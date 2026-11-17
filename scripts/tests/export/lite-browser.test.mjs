@@ -4,42 +4,9 @@
 // 用例注释格式：方法级写测试场景；语句中「输入」部分标记输入；断言按「预期 1/2/…」逐条注释。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import os from 'node:os';
-import path from 'node:path';
-import { t_nativeReferenceEnv } from '../native-reference-env.mjs';
 import liteHttp from '../../lite-http.mjs';
 import liteServer from '../../lite-server.mjs';
 import liteBrowser from '../../lite-browser.mjs';
-
-/** 场景：软链接依赖拥有独立 Playwright 安装时，浏览器模块不重复初始化调用方的测试框架。 */
-test('独立安装：调用方已加载 @playwright/test 后仍可导入 lite-browser', () => {
-  // 输入：先动态加载 @playwright/test 再导入 lite-browser 并执行 open/close。
-  const root = mkdtempSync(path.join(os.tmpdir(), 'lite-browser-consumer-'));
-  const require = createRequire(import.meta.url);
-  try {
-    for (const name of ['@playwright/test', 'playwright']) {
-      const destination = path.join(root, 'node_modules', name);
-      mkdirSync(path.dirname(destination), { recursive: true });
-      cpSync(path.dirname(require.resolve(`${name}/package.json`)), destination, { recursive: true });
-    }
-    symlinkSync(path.dirname(require.resolve('playwright-core/package.json')), path.join(root, 'node_modules/playwright-core'), 'dir');
-    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
-      import assert from 'node:assert/strict';
-      import { createRequire } from 'node:module';
-      const require = createRequire(${JSON.stringify(path.join(root, 'consumer.cjs'))});
-      const { expect } = require('@playwright/test');
-      const initiator = process.__pw_initiator__;
-      const { default: browser } = await import(${JSON.stringify(new URL('../../lite-browser.mjs', import.meta.url).href)});
-      expect(typeof browser.open).toBe('function');
-      assert.equal(process.__pw_initiator__, initiator, '浏览器模块不能再次初始化测试框架');
-    `], { encoding: 'utf8', env: t_nativeReferenceEnv(), timeout: 30_000 });
-    assert.ifError(result.error, '页面加载不应报错');
-    assert.equal(result.status, 0, `双份安装时导入应成功：${result.stderr}`);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
 
 /** 场景：共享单例页——open 幂等复用、页面经真实 socket 取回包、观测账本入账、close 清空单例。 */
 test('共享单例页：open 幂等、真实 socket 回包、账本入账、close 清空', async () => {

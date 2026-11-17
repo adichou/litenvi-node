@@ -1,18 +1,21 @@
 // 浏览器定时门面的黑盒用例：真实页面显式导入模块，原生 API 作为响应和类型的对照。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import fs from 'litenvi-node/lite-fs.mjs';
 import timer from '../../lite-browser-timer.mjs';
 import liteBrowser from '../../lite-browser.mjs';
 import liteHttp from '../../lite-http.mjs';
 import liteServer from '../../lite-server.mjs';
 
 async function f_withTimerPage(run, setupScript = '') {
+  fs.t_unmock();
+  fs.t_mock({ exclude: [new URL('../../', import.meta.url).pathname] });
   liteHttp.t_mock(); liteServer.t_mock();
   const server = liteServer.createServer((req, res) => {
     if (req.url === '/timer.mjs') {
       res.writeHead(200, { 'Content-Type': 'text/javascript' });
-      res.end(fs.readFileSync(new URL('../../lite-browser-timer.mjs', import.meta.url)));
+      res.end(fs.readFileSync(fileURLToPath(new URL('../../lite-browser-timer.mjs', import.meta.url))));
     } else if (req.url === '/slow') res.end('response-body');
     else {
       res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -29,7 +32,7 @@ async function f_withTimerPage(run, setupScript = '') {
     await page.waitForFunction(() => !!window.timerFixture);
     return await run(page);
   } finally {
-    await liteBrowser.close(); liteServer.t_unmock(); liteHttp.t_unmock();
+    await liteBrowser.close(); liteServer.t_unmock(); liteHttp.t_unmock(); fs.t_unmock();
   }
 }
 
@@ -66,7 +69,7 @@ test('gate 生命周期：幂等、缓存入口、分批触发、清理与恢复
       const first = timer.t_mock();
       window.gateProbe = { a: cachedTimeout(1), b: timer.AbortSignal.timeout(1) };
       const same = timer.t_mock() === first && first === timer;
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await Promise.race([new Promise(resolve => window.gateProbe.a.addEventListener('abort', resolve)), new Promise(resolve => setTimeout(resolve, 20))]);
       return { same, aborted: [window.gateProbe.a.aborted, window.gateProbe.b.aborted],
         nativeUnchanged: window.nativeTimeout === AbortSignal.timeout };
     });
@@ -200,7 +203,10 @@ test('上下文隔离：Node 门面控制不改原生对象，也不影响浏览
     timer.t_unmock();
     assert.equal(cancelled.reason.name, 'AbortError', '卸载应取消未结束的 gate');
     const real = cached(5);
-    await new Promise(resolve => setTimeout(resolve, 20)); // 真实计时观察窗（本文件经例外登记：被测即真实时序）
+    await new Promise((resolve, reject) => {
+      const guard = setTimeout(() => reject(new Error('原生信号未按期触发')), 1000);
+      real.addEventListener('abort', () => { clearTimeout(guard); resolve(); }, { once: true });
+    });
     assert.equal(real.reason.name, 'TimeoutError', '缓存门面入口在卸载后应恢复原生计时');
     assert.equal(globalThis.AbortSignal, native, '原生全局类不应改写');
     assert.equal(native.timeout, nativeTimeout, '原生静态方法不应改写');
@@ -214,17 +220,19 @@ test('interval gate：接管已有定时器、手动推进和异步完成', asyn
     const initial = await page.evaluate(async () => {
       const { timer } = window.timerFixture;
       window.intervalProbe = { ticks: 0, args: null };
+      const firstTick = Promise.withResolvers();
       const nativeInterval = globalThis.setInterval;
       window.intervalProbe.id = timer.setInterval(async function(value) {
         await Promise.resolve();
         window.intervalProbe.ticks++;
+        firstTick.resolve();
         window.intervalProbe.args = value;
         window.intervalProbe.receiver = this === globalThis;
       }, 1, 'payload');
       timer.t_mock();
       const same = timer.t_mock() === timer;
       window.intervalProbe.signal = timer.AbortSignal.timeout(1);
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await Promise.race([firstTick.promise, new Promise(resolve => setTimeout(resolve, 20))]);
       return { ticks: window.intervalProbe.ticks, same, native: nativeInterval === globalThis.setInterval, signalAborted: window.intervalProbe.signal.aborted };
     });
     assert.deepEqual(initial, { ticks: 0, same: true, native: true, signalAborted: false }, '一次 Mock 应同时冻结已有周期与新超时信号，并保留浏览器全局定时器');
@@ -292,17 +300,23 @@ test('interval gate：拒绝非法参数并传播回调错误', async () => {
       try { timer.setInterval(null, 1); } catch (failure) { callback = failure.name; }
       const id = timer.setInterval(() => { throw new Error('interval failure'); }, 1);
       let completed = false;
+      const entered = Promise.withResolvers(), release = Promise.withResolvers();
       const other = timer.setInterval(async () => {
-        await new Promise(resolve => setTimeout(resolve, 10));
+        entered.resolve();
+        await release.promise;
         completed = true;
       }, 1);
-      try { await timer.t_tickIntervals(); } catch (failure) { step = failure.message; }
+      const running = timer.t_tickIntervals().catch(failure => { step = failure.message; });
+      await entered.promise;
+      const beforeRelease = completed;
+      release.resolve();
+      await running;
       timer.clearInterval(id);
       timer.clearInterval(other);
   // 输入：向 interval gate 传入非法参数，回调内抛错。
-      return { callback, step, completed };
+      return { callback, step, completed, beforeRelease };
     });
-    assert.deepEqual(errors, { callback: 'TypeError', step: 'interval failure', completed: true }, '非法回调和执行错误应反馈给测试，不得静默吞掉');
+    assert.deepEqual(errors, { callback: 'TypeError', step: 'interval failure', completed: true, beforeRelease: false }, '非法回调和执行错误应反馈给测试，不得静默吞掉');
   });
 });
 

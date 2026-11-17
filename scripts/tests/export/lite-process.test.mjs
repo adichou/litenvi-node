@@ -110,7 +110,7 @@ test('execPath：未安装抛错、安装后为 node 命令 execPath、真实世
     // 预期 2：为 node 命令条目的 execPath（通用接口，值即注册路径）
     assert.equal(liteProcess.execPath, NODE_COMMAND_PATH, '安装后 execPath 应为 node 命令路径');
     // 预期 3：注册路径值为 /mock-cmd/usr/local/bin/node
-    assert.equal(NODE_COMMAND_PATH, '/mock-cmd/usr/local/bin/node', 'node 命令路径应为命名空间内完整路径');
+    assert.equal(mgr.command('node').execPath, '/mock-cmd/usr/local/bin/node', 'node 命令路径应为命名空间内完整路径');
   } finally {
     done();
   }

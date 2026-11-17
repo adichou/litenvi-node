@@ -105,8 +105,7 @@ const f_createMemoryServer = () => {
                     for (const fault of matched) {
                         if (fault.wait instanceof Promise)
                             await fault.wait;
-                        if (isAborted())
-                            return;
+                        if (isAborted()) { resolve(null); return; }
                         if (fault.status !== undefined) {
                             status = fault.status;
                             headers = { 'content-type': 'application/json' };
@@ -182,8 +181,9 @@ const f_createMemoryServer = () => {
     function f_frontend(realReq, realRes, server) {
         const chunks = [];
         let aborted = false;
+        let record = null;
         // 私有方法：仅在本文件实现中使用，不导出。
-        const f_done = () => { aborted = true; };
+        const f_done = () => { aborted = true; if (record) record.aborted = true; };
         realReq.on('aborted', f_done); // 客户端中途弃连（请求体未收全）
         realRes.on('close', () => { if (!realRes.writableEnded) f_done(); }); // 回写完成前连接断开
         realReq.on('data', (chunk) => chunks.push(chunk));
@@ -197,14 +197,16 @@ const f_createMemoryServer = () => {
                 path: at === -1 ? raw : raw.slice(0, at),
                 query: at === -1 ? '' : raw.slice(at),
                 body: chunks.length ? Buffer.concat(chunks).toString('utf8') : null,
-                status: 0,
+                status: 0, aborted: false, finished: false,
             };
+            record = rec;
             forwarded.push(rec);
             if (!i_isClientMocked()) { // 保留原有前置约束：socket 回灌须启用内存传输。
                 const error = JSON.stringify({ error: 'lite-server socket 前端需先 liteHttp.t_mock()：内存 HTTP 传输尚未启用' });
                 realRes.writeHead(500, { 'content-type': 'application/json' });
                 realRes.end(error);
                 rec.status = 500;
+                rec.finished = true;
                 return;
             }
             (async () => {
@@ -229,7 +231,7 @@ const f_createMemoryServer = () => {
                     if (!res.faulted) rec.serverResponse = rec.response;
                 } catch {
                     realRes.destroy(); // 管线异常（拒连/闸门失败等）：对齐旧 route.abort——账本停在 status 0
-                }
+                } finally { rec.finished = true; }
             })();
         });
     }
@@ -295,7 +297,7 @@ const f_createMemoryServer = () => {
                     return this;
                 },
             });
-            server.i_dispose = () => { server.listening = false; if (httpServer) { httpServer.closeIdleConnections?.(); httpServer.closeAllConnections?.(); httpServer.close(); httpServer = null; } };
+            server.i_dispose = () => { server.listening = false; if (httpServer) { httpServer.closeIdleConnections?.(); httpServer.closeAllConnections?.(); const carrier = httpServer; httpServer = null; if (carrier.listening) carrier.close(() => server.emit('close')); else carrier.close(); } };
             servers.add(server);
             return server;
         },

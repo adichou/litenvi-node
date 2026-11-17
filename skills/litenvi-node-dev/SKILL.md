@@ -68,8 +68,10 @@ description: 开发 litenvi-node 仓库本身时使用。修改 lite-* 门面源
 - `fault = { exit?, stderr?, wait?, once?, subcommand? }`；规则按注入顺序取首个命中，`once` 命中即毁。
 - git 子命令匹配支持跳过 `-c` / `-C` / `--no-optional-locks` / `--no-pager` / `--literal-pathspecs` 全局选项。
 - checkpoint 注入：`{ checkpoint, onHit }`，同步回调，在扫描未完成时重入内存命令；与故障互斥；用完必须调用返回的移除函数。
-- 命令句柄 `t_onRun(handler)`：handler 为 `(call, runBuiltin) => result`，可包一层改写内置实现的结果；`t_onRun(null)` 移除。故障优先于钩子和内置执行。
+- 命令句柄 `t_onRun(handler)`：handler 为 `(call, runBuiltin) => result`，同步与异步命令均生效。返回结果替换，返回 `undefined` 回落内置。异步入口支持 Promise 和显式等待闸门；同步入口拒绝 Promise。`runBuiltin()` 对同步实现返回对象、异步实现返回聚合输出的 Promise，同次只执行一次。无钩子时仍流式执行；`t_onRun(null)` 移除。故障优先于钩子和内置执行，取消或卸载后不得投递迟到结果。
 - 校验逻辑集中在 `lite-cmd-mgr` 的 `f_validateFault`，新增字段先过校验并同步错误消息。
+
+- 子进程超时钟通过 `t_mock({ timers })` 显式注入，不安装假时钟到宿主全局。卸载先清理在途超时，再恢复原生时钟。socket 账本区分 aborted 和 finished，取消分支也必须结算 Promise；卸载后的 close 代表真实监听已关停。
 
 ### 文档即代码
 

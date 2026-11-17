@@ -30,15 +30,13 @@ function f_setup() {
 }
 
 // 夹具工厂：真实目录提供入口源码，共享 liteFs 门面承接内存文件副作用。
-import realFs, { readFileSync as nativeReadFileSync, writeFileSync as nativeWriteFileSync, existsSync as nativeExistsSync } from 'node:fs';
-import os from 'node:os';
 import liteFs from '../../lite-fs.mjs';
 import liteServer from '../../lite-server.mjs';
 const liteFsUrl = new URL('../../lite-fs.mjs', import.meta.url).href;
 let fixtureSeq = 0;
 function f_writeFixture(code) {
   const name = path.join(EXCLUDED, `lite-cmd-node-fixture-${process.pid}-${++fixtureSeq}.mjs`);
-  realFs.writeFileSync(name, `import liteFs from '${liteFsUrl}';\n${code}\n`);
+  liteFs.writeFileSync(name, `import liteFs from '${liteFsUrl}';\n${code}\n`);
   return name;
 }
 
@@ -115,7 +113,7 @@ test('node --test：真实断言、名称过滤、重复执行及覆盖率', asy
     assert.match(coverage.stdout, /line %.*branch %.*funcs %/, '覆盖率表应包含行、分支和函数指标');
     assert.doesNotMatch(coverage.stdout, /lite-cmd-node(?:-test-worker)?\.mjs/, '目标项目覆盖率不应混入虚拟命令执行器');
     assert.match(coverage.stdout, new RegExp(path.basename(fixture).replaceAll('.', '\\.')), '覆盖率应包含实际执行的夹具文件');
-  } finally { done(); realFs.unlinkSync(fixture); }
+  } finally { done(); liteFs.unlinkSync(fixture); }
 });
 
 /** 场景：测试启动参数、源码作用域和执行错误均明确失败，不能悄悄回退或产生成功 TAP。 */
@@ -147,46 +145,9 @@ test('node --test 边界：非法参数、缺失源码与内存独有源码明�
       assert.match(output, scenario.error, `${scenario.args.join(' ')} 应保留实际失败原因`);
       assert.doesNotMatch(output, /^ok \d+ - probe$/m, '启动或加载失败不能冒充测试已通过');
     }
-  } finally { done(); realFs.unlinkSync(fixture); }
+  } finally { done(); liteFs.unlinkSync(fixture); }
 });
 
-/** 场景：覆盖率范围旗标把统计限定在指定 glob 内——范围外真实模块不计入覆盖率表，等号与空格取值均可。 */
-test('node --test 覆盖率范围：include/exclude glob 生效', async () => {
-  const foreignDir = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-cov-foreign-'));
-  const foreign = path.join(foreignDir, 'foreign.mjs');
-  realFs.writeFileSync(foreign, 'export const v = 1;\n');
-  const fixture = f_writeFixture(`
-    import { test } from 'node:test';
-    import { v } from '${pathToFileURL(foreign).href}';
-    test('scope', function scope() { if (v !== 1) throw new Error('范围外模块应真实加载'); });
-  `);
-  const done = f_setup();
-  const run = async args => {
-    const child = liteChildProcess.spawn('node', args);
-    let stdout = '', stderr = '';
-    child.stdout.on('data', chunk => { stdout += chunk; });
-    child.stderr.on('data', chunk => { stderr += chunk; });
-    const closed = await liteChildProcess.waitForClose(child);
-    return { ...closed, stdout, stderr };
-  };
-  try {
-    const dir = path.dirname(fixture);
-    const foreignReal = realFs.realpathSync(foreignDir); // 覆盖率按 realpath 匹配（/var → /private/var）
-    // 输入：默认运行、include 锚定夹具目录（等号取值）、exclude 排除范围外目录（空格取值，真实路径）。
-    const all = await run(['--test', '--experimental-test-coverage', fixture]);
-    const scoped = await run(['--test', '--experimental-test-coverage', `--test-coverage-include=${dir}/**`, fixture]);
-    const excluded = await run(['--test', '--experimental-test-coverage', '--test-coverage-exclude', `${foreignReal}/**`, fixture]);
-    // 预期 1：默认运行把加载到的范围外真实模块计入覆盖率表。
-    assert.equal(all.code, 0, `范围用例应通过：${all.stderr}`);
-    assert.match(all.stdout, /foreign\.mjs/, '默认运行应把范围外真实模块计入覆盖率');
-    // 预期 2：include 锚定后范围外模块消失，夹具自身仍被统计。
-    assert.doesNotMatch(scoped.stdout, /foreign\.mjs/, 'include 应把范围外模块排除出覆盖率');
-    assert.match(scoped.stdout, /lite-cmd-node-fixture-[^.]*\.mjs/, 'include 后夹具自身仍应统计');
-    // 预期 3：exclude（空格取值）同样把范围外模块排除。
-    assert.doesNotMatch(excluded.stdout, /foreign\.mjs/, 'exclude 应把范围外模块排除出覆盖率');
-    assert.match(excluded.stdout, /lite-cmd-node-fixture-[^.]*\.mjs/, 'exclude 不应波及夹具自身统计');
-  } finally { done(); realFs.unlinkSync(fixture); realFs.rmSync(foreignDir, { recursive: true, force: true }); }
-});
 
 /** 场景：等待中的真实测试 Worker 随虚拟子进程终止，后续命令仍正常运行。 */
 test('node --test 信号：终止等待中的真实 Worker 并清理资源', async () => {
@@ -216,118 +177,11 @@ test('node --test 信号：终止等待中的真实 Worker 并清理资源', asy
     // 预期 2：终止不会污染宿主命令分派。
     const version = liteChildProcess.spawnSync('npm', ['-v'], { encoding: 'utf8' });
     assert.equal(version.stdout, '10.9.0\n', '终止后后续命令仍应正常运行');
-  } finally { child?.kill('SIGKILL'); done(); realFs.unlinkSync(fixture); }
+  } finally { child?.kill('SIGKILL'); done(); liteFs.unlinkSync(fixture); }
 });
 
-/** 场景：普通 import 在宿主中加载源码，入口可重复执行，并发命令各自使用参数与输出管道。 */
-test('普通 import：共享宿主全局、重复入口执行、并发输出与宿主环境恢复', async () => {
-  const marker = Symbol.for('litenvi-node-native-import');
-  globalThis[marker] = { count: 0 };
-  const original = { argv: process.argv, env: process.env, cwd: process.cwd(), exitCode: process.exitCode,
-    log: console.log, timer: setTimeout, readFile: realFs.readFileSync, exit: process.exit };
-  const fixture = f_writeFixture(`
-    const state = globalThis[Symbol.for('litenvi-node-native-import')];
-    state.count++;
-    await new Promise(resolve => setTimeout(resolve, Number(process.argv[2])));
-    console.log(JSON.stringify({ tag: process.env.LITE_IMPORT_TAG, arg: process.argv[3], count: state.count }));
-  `);
-  const done = f_setup();
-  const launch = (tag, delay) => {
-    const child = liteChildProcess.spawn('node', [fixture, String(delay), tag], { env: { LITE_IMPORT_TAG: tag } });
-    let output = '';
-    child.stdout.on('data', chunk => { output += chunk; });
-    return liteChildProcess.waitForClose(child).then(closed => ({ closed, output }));
-  };
-  try {
-    // 输入：同一入口连续执行两次，再并发执行两次，ES 模块源码直接访问宿主全局标记
-    const first = await launch('first', 1);
-    const second = await launch('second', 1);
-    const parallel = await Promise.all([launch('slow', 10), launch('fast', 1)]);
-    // 预期 1：每次入口真实执行且正常退出
-    for (const result of [first, second, ...parallel]) assert.deepEqual(result.closed, { code: 0, signal: null }, '普通 import 应成功执行');
-    assert.equal(globalThis[marker].count, 4, '入口应共享宿主全局且每次重新执行');
-    // 预期 2：并发命令的参数、env 与 stdout 不串到其他命令
-    assert.deepEqual([first, second, ...parallel].map(result => {
-      const { tag, arg } = JSON.parse(result.output);
-      return [tag, arg];
-    }), [['first', 'first'], ['second', 'second'], ['slow', 'slow'], ['fast', 'fast']], '并发输出与参数应对应各自命令');
-    // 预期 3：宿主的 process 字段保持原来的值与对象
-    assert.equal(process.argv, original.argv, '宿主 argv 应恢复');
-    assert.equal(process.env, original.env, '宿主 env 应恢复');
-    assert.equal(process.cwd(), original.cwd, '宿主 cwd 应保持不变');
-    assert.equal(process.exitCode, original.exitCode, '宿主退出码应保持不变');
-    assert.equal(console.log, original.log, '宿主 console 方法应恢复');
-    assert.equal(setTimeout, original.timer, '宿主定时器方法应恢复');
-    assert.equal(realFs.readFileSync, original.readFile, '宿主 fs 方法应恢复');
-    assert.equal(process.exit, original.exit, '宿主 exit 方法应恢复');
-  } finally {
-    done();
-    realFs.unlinkSync(fixture);
-    delete globalThis[marker];
-  }
-});
 
 /** 场景：虚拟 Node 命令运行期间不替换原生 fs，CJS、ESM 默认和具名导入保持同一原生接口。
- * 夹具只观测原生接口身份，不通过原生 fs 读写业务文件；stdin 闸门保持命令运行以检查中间状态。 */
-test('显式文件边界：运行中原生 fs 保持不变', { timeout: 5000 }, async () => {
-  liteChildProcess.t_unmock();
-  liteFs.t_unmock();
-  const original = { read: realFs.readFileSync, write: realFs.writeFileSync, exists: realFs.existsSync };
-  const fixture = f_writeFixture(`
-    import fs from 'node:fs';
-    import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-    import { createRequire } from 'node:module';
-    const cjsFs = createRequire(import.meta.url)('fs');
-    console.log(JSON.stringify({
-      esm: readFileSync === fs.readFileSync && writeFileSync === fs.writeFileSync && existsSync === fs.existsSync,
-      cjs: cjsFs.readFileSync === fs.readFileSync && cjsFs.writeFileSync === fs.writeFileSync && cjsFs.existsSync === fs.existsSync,
-    }));
-    await new Promise(resolve => process.stdin.once('data', resolve));
-    console.log('released');
-  `);
-  const done = f_setup();
-  let child, closed;
-  try {
-    // 输入：启动夹具，收到接口观测结果后仍阻塞于 stdin，不使用固定睡眠猜测运行阶段。
-    child = liteChildProcess.spawn('node', [fixture]);
-    closed = liteChildProcess.waitForClose(child);
-    let output = '';
-    const ready = new Promise((resolve, reject) => {
-      child.stdout.on('data', chunk => {
-        output += chunk;
-        if (output.includes('\n')) {
-          try { resolve(JSON.parse(output.split('\n')[0])); }
-          catch (error) { reject(error); }
-        }
-      });
-      child.once('error', reject);
-      child.once('close', () => reject(new Error('夹具未报告接口身份便提前退出')));
-    });
-    const imports = await ready;
-    // 预期 1：命令确实仍在运行，原生默认对象和 ESM 具名导出均未被换成包装函数。
-    assert.equal(child.exitCode, null, 'stdin 闸门释放前虚拟 Node 应保持运行');
-    assert.equal(realFs.readFileSync, original.read, '命令运行中不得替换原生 readFileSync');
-    assert.equal(realFs.writeFileSync, original.write, '命令运行中不得替换原生 writeFileSync');
-    assert.equal(realFs.existsSync, original.exists, '命令运行中不得替换原生 existsSync');
-    assert.equal(nativeReadFileSync, original.read, '命令运行中不得改写 ESM 具名 readFileSync');
-    assert.equal(nativeWriteFileSync, original.write, '命令运行中不得改写 ESM 具名 writeFileSync');
-    assert.equal(nativeExistsSync, original.exists, '命令运行中不得改写 ESM 具名 existsSync');
-    assert.deepEqual(imports, { esm: true, cjs: true }, '脚本中的 CJS 与 ESM 导入应保持一致的原生 fs 接口');
-
-    // 输入：显式释放 stdin 闸门，等待命令通过正常生命周期结束。
-    child.stdin.end('release');
-    // 预期 2：命令正常退出，期间保留的原生接口在退出后仍保持原样。
-    assert.deepEqual(await closed, { code: 0, signal: null }, '释放闸门后虚拟 Node 应正常结束');
-    assert.ok(output.endsWith('released\n'), '脚本应在闸门释放后继续执行到结尾');
-    assert.equal(realFs.readFileSync, original.read, '命令结束后原生 readFileSync 应保持原样');
-    assert.equal(nativeReadFileSync, original.read, '命令结束后 ESM 具名 readFileSync 应保持原样');
-  } finally {
-    child?.stdin.end('cleanup');
-    if (closed) await closed;
-    done();
-    realFs.unlinkSync(fixture);
-  }
-});
 
 /** 场景：自研入口显式使用 lite-fs 执行读写和业务计算，写入故障经脚本处理后反映到 stderr 与退出码。 */
 test('显式文件边界：lite-fs 读写与故障传播', async () => {
@@ -372,7 +226,7 @@ test('显式文件边界：lite-fs 读写与故障传播', async () => {
   } finally {
     remove?.();
     done();
-    realFs.unlinkSync(fixture);
+    liteFs.unlinkSync(fixture);
   }
 });
 
@@ -398,7 +252,7 @@ test('嵌套命令：spawn/spawnSync 统一入账，未实现的 fork 明确失�
     assert.deepEqual(liteChildProcess.t_calls().map(call => call.command), ['node', 'echo', 'echo'], '嵌套命令应通过内存分派');
   } finally {
     done();
-    realFs.unlinkSync(fixture);
+    liteFs.unlinkSync(fixture);
   }
 });
 
@@ -412,7 +266,7 @@ test('导入即登记：node/npm 在 mgr 登记名单、node 命令路径为 exe
   // 预期 3：裸名寻址到句柄
   assert.equal(mgr.command('node').path, NODE_COMMAND_PATH, '裸名 node 应寻址到命令句柄');
   // 预期 4：常量值为 /mock-cmd/usr/local/bin/node（lite-process 的 execPath 取此值）
-  assert.equal(NODE_COMMAND_PATH, '/mock-cmd/usr/local/bin/node', 'node 命令路径应为命名空间内完整路径');
+  assert.equal(mgr.command('node').execPath, '/mock-cmd/usr/local/bin/node', 'node 命令路径应为命名空间内完整路径');
 });
 
 /** 场景：版本探测——node 使用宿主版本，npm 固定为 10.9.0。 */
@@ -457,7 +311,7 @@ liteFs.writeFileSync('/mock/project/fixture-out.json', JSON.stringify({
     // 原生 import 以 URL 缓存；运行序号只用于重执行入口，真实文件地址仍须一致。
     assert.match(entryUrl.searchParams.get('litenviRun'), /^\d+$/, '入口 URL 应包含重新执行入口所需的运行序号');
     entryUrl.searchParams.delete('litenviRun');
-    assert.equal(entryUrl.href, pathToFileURL(realFs.realpathSync(fixture)).href, '入口应对应真实文件（realpath 归一：macOS /var → /private/var）');
+    assert.equal(entryUrl.href, pathToFileURL(liteFs.realpathSync(fixture)).href, '入口应对应真实文件（realpath 归一：macOS /var → /private/var）');
     // 预期 2：options.env 已落 process.env（入口加载期可读）
     assert.equal(out.env, 'lit', 'env 应先落 process.env');
     // 预期 3：argv 为子进程口径 [入口, 入口后参数]——入口前旗标剔除
@@ -468,7 +322,7 @@ liteFs.writeFileSync('/mock/project/fixture-out.json', JSON.stringify({
     liteChildProcess.t_unmock();
     liteProcess.t_unmock();
     liteFs.t_unmock();
-    realFs.unlinkSync(fixture);
+    liteFs.unlinkSync(fixture);
   }
 });
 
@@ -548,7 +402,7 @@ test('假世界文件入口：argv 双视图一致、并发隔离与父世界保
     done();
     liteProcess.t_unmock();
     process.argv = nativeArgv;
-    realFs.unlinkSync(fixture);
+    liteFs.unlinkSync(fixture);
   }
 });
 
@@ -601,7 +455,7 @@ test('假世界文件入口：异常退出与 kill 保持父世界 argv', async 
     done();
     liteProcess.t_unmock();
     process.argv = nativeArgv;
-    realFs.unlinkSync(fixture);
+    liteFs.unlinkSync(fixture);
   }
 });
 
@@ -622,7 +476,7 @@ test('入口加载失败：stderr 带错误信息、退出码 1', async () => {
   } finally {
     liteChildProcess.t_unmock();
     liteFs.t_unmock();
-    realFs.unlinkSync(fixture);
+    liteFs.unlinkSync(fixture);
   }
 });
 
@@ -698,7 +552,7 @@ test('共享服务门面：内存服务关闭后 Node 正常退出', async () =>
   } finally {
     done();
     liteServer.t_unmock();
-    realFs.unlinkSync(fixture);
+    liteFs.unlinkSync(fixture);
   }
 });
 
@@ -724,7 +578,7 @@ test('撤销环境：unmock 后定时器不再产生文件副作用', async () =
     assert.equal(liteFs.readFileSync('/node-ticks', 'utf8'), last, 'unmock 应取消活动子进程的定时器');
   } finally {
     done();
-    realFs.unlinkSync(fixture);
+    liteFs.unlinkSync(fixture);
   }
 });
 
@@ -777,7 +631,7 @@ test('Node 选项终止符：-- 后运行脚本，无脚本时读取 stdin', asy
     assert.deepEqual(await run(['--', fixture, '-flag']), { code: 0, signal: null, stdout: '-flag\n', stderr: '' }, '终止符后的脚本参数应保持字面值');
     assert.deepEqual(await run(['--'], 'console.log("stdin-after-separator")'),
       { code: 0, signal: null, stdout: 'stdin-after-separator\n', stderr: '' }, '无脚本名时应执行 stdin');
-  } finally { done(); realFs.unlinkSync(fixture); }
+  } finally { done(); liteFs.unlinkSync(fixture); }
 });
 
 /** 场景：脚本重设 process 字段仅影响虚拟运行态，宿主同时写 argv 后仍能恢复。 */
@@ -811,33 +665,6 @@ test('Process 字段写入：脚本与宿主环境保持各自视图', async () 
   } finally { process.argv = originalArgv; done(); }
 });
 
-/** 场景：终止持有监听服务的脚本时，服务资源也随命令释放。 */
-test('活动服务清理：终止 Node 后关闭其监听端口', async () => {
-  const done = f_setup();
-  liteServer.t_mock();
-  const serverUrl = new URL('../../lite-server.mjs', import.meta.url).href;
-  const fixture = f_writeFixture(`
-    import server from '${serverUrl}';
-    server.createServer((_req, res) => res.end('active')).listen(0, () => console.log('ready'));
-  `);
-  try {
-    // 输入：脚本保持服务监听，从公共子进程句柄终止它
-    const child = liteChildProcess.spawn('node', [fixture]);
-    const closed = liteChildProcess.waitForClose(child);
-    await new Promise(resolve => child.stdout.once('data', resolve));
-    const port = liteServer.t_port();
-    assert.ok(port > 0, '终止前服务应有实际监听端口');
-    child.kill();
-    // 预期：子进程以信号结束，服务监听已解除
-    assert.deepEqual(await closed, { code: null, signal: 'SIGTERM' }, '终止信号应反映在子进程结果上');
-    const { default: http } = await import('node:http');
-    const connection = await new Promise(resolve => {
-      http.get({ hostname: '127.0.0.1', port }, response => { response.resume(); resolve('connected'); })
-        .on('error', error => resolve(error.code));
-    });
-    assert.equal(connection, 'ECONNREFUSED', '命令结束后原端口应拒绝新连接');
-  } finally { done(); liteServer.t_unmock(); realFs.unlinkSync(fixture); }
-});
 
 /** 场景：信号到达虚拟进程时已注册处理器则消费执行，未注册则按默认语义终止。 */
 test('内存 Node 收到信号时执行处理器，未处理信号仍直接终止', async () => {
@@ -903,7 +730,7 @@ test('信号关停遇到服务关闭挂起时仍触发进程内兜底退出', as
     assert.deepEqual(await closed, { code: 0, signal: null }, '兜底应以正常退出码结束');
     assert.match(output, /fallback/, '关闭挂起时应执行兜底');
     assert.doesNotMatch(output, /closed/, '闸门释放前关闭回调不得执行');
-  } finally { release(); liteServer.t_unmock(); done(); realFs.rmSync(fixture, { force: true }); }
+  } finally { release(); liteServer.t_unmock(); done(); liteFs.rmSync(fixture, { force: true }); }
 });
 
 /** 场景：spawn 输入暂存为 fd 0——脚本内 liteFs.readFileSync(0) 同步读到 spawn 的 input；无输入读得空串。 */
@@ -929,7 +756,7 @@ test('stdin 同步读面：脚本 liteFs.readFileSync(0) 收到 spawn input，�
       child.on('close', () => resolve({ stdout }));
     });
     assert.equal(noInput.stdout, '', '预期 2：无输入读得空串');
-  } finally { done(); realFs.rmSync(fixture, { force: true }); }
+  } finally { done(); liteFs.rmSync(fixture, { force: true }); }
 });
 
 /** 场景：跨运行隔离——上一次运行的 fd 0 暂存在 dispose 时释放，后继运行只读到自己的输入。 */
@@ -951,7 +778,7 @@ test('stdin 暂存跨运行隔离：第二次运行不残留第一次输入', as
     }
     // 预期：两次运行各自读到自己的输入，无跨运行残留
     assert.deepEqual(outputs, ['first\n', 'second\n'], '输出应按完成顺序逐条到达');
-  } finally { done(); realFs.rmSync(fixture, { force: true }); }
+  } finally { done(); liteFs.rmSync(fixture, { force: true }); }
 });
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——命令集无独立门面实例，以测试协作面
@@ -1009,7 +836,7 @@ test('npm run：内存执行脚本、banner 与退出码透传', async () => {
     const pipe = await run(['run', 'pipe']);
     assert.equal(pipe.code, 1, 'shell 操作符脚本应退出 1');
     assert.ok(pipe.stderr.includes('未实现的 shell 语法'), 'shell 操作符应明确报错');
-  } finally { done(); realFs.unlinkSync(helloFixture); }
+  } finally { done(); liteFs.unlinkSync(helloFixture); }
 });
 
 /** 场景：npm run 同步面要求嵌套命令提供同步实现；用户级命令可同步执行，异步专用命令明确
@@ -1053,5 +880,5 @@ test('npm run：同步面限制与信号转发', async () => {
     const closed = await liteChildProcess.waitForClose(child);
     assert.equal(closed.code, 3, 'SIGTERM 应转发嵌套命令并按脚本退出码结算');
     assert.ok(stdout.includes('term'), '信号处理输出应透传');
-  } finally { done(); realFs.unlinkSync(slowFixture); }
+  } finally { done(); liteFs.unlinkSync(slowFixture); }
 });

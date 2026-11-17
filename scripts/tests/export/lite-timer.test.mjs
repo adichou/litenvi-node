@@ -5,7 +5,6 @@ import assert from 'node:assert/strict';
 import liteTimer, { setTimeout, clearTimeout, setInterval, clearInterval, Date } from '../../lite-timer.mjs';
 
 const NativeDate = globalThis.Date;
-const f_realSleep = (ms) => new Promise(resolve => globalThis.setTimeout(resolve, ms));
 
 /** 场景：未 mock 时五个绑定原样转发——真实计时、原生 Date 面，advanceMs 明确拒绝。 */
 test('默认透传：真实定时器、原生 Date、advanceMs 拒绝', async () => {
@@ -37,9 +36,10 @@ test('虚拟时钟：纪元冻结、手动推进、到期序与回调内新建�
     assert.equal(Date.UTC(2026, 0, 2), NativeDate.UTC(2026, 0, 2), 'UTC 静态面应透传');
 
     const seen = [];
+    const fired = Promise.withResolvers();
     setTimeout((a, b) => seen.push(['later', a, b]), 500, 'x', 1);
-    setTimeout(() => seen.push(['sooner', Date.now()]), 200);
-    await f_realSleep(30);
+    setTimeout(() => { seen.push(['sooner', Date.now()]); fired.resolve(); }, 200);
+    await Promise.race([fired.promise, new Promise(resolve => globalThis.setTimeout(resolve, 30))]);
     assert.deepEqual(seen, [], '真实时间流逝不得触发冻结世界的定时器');
     await liteTimer.t_advanceMs(199);
     assert.deepEqual(seen, [], '未到期的定时器不得提前触发');
@@ -103,7 +103,8 @@ test('unmock：在途定时器丢弃、原生计时恢复', async () => {
   liteTimer.t_unmock();
   liteTimer.t_mock({ now: 0 });
   const ghost = [];
-  setTimeout(() => ghost.push('fired'), 100);
+  const leaked = Promise.withResolvers();
+  setTimeout(() => { ghost.push('fired'); leaked.resolve(); }, 100);
   liteTimer.t_unmock();
   liteTimer.t_unmock();
   await assert.rejects(() => liteTimer.t_advanceMs(1), /需要 t_mock/, '卸载后推进应明确拒绝');
@@ -111,7 +112,7 @@ test('unmock：在途定时器丢弃、原生计时恢复', async () => {
   assert.equal(realFired, 'ran', '卸载后 setTimeout 应恢复真实计时');
   const at = NativeDate.now();
   assert.ok(Math.abs(Date.now() - at) < 1_000, '卸载后 Date.now 应恢复原生');
-  await f_realSleep(30);
+  await Promise.race([leaked.promise, new Promise(resolve => globalThis.setTimeout(resolve, 30))]);
   // 输入：mock 态注册在途定时器后 t_unmock，再注册原生定时器。
   assert.deepEqual(ghost, [], '被丢弃的虚拟定时器不得再触发');
 });

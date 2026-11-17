@@ -62,7 +62,10 @@ try {
 - **Git 须显式安装**：`import { t_install } from 'litenvi-node/lite-cmd-git.mjs'; t_install();`——仅导入不会登记，执行返回 `ENOENT`。`t_install()` 在内存卷建立前后调用皆可，幂等。
 - **ESLint 直接使用官方 API**：规则测试使用 RuleTester，配置测试使用真实工厂与 Linter.verify / ESLint.lintText；规则读写的项目数据通过 lite-fs 装配，不需要内存 ESLint 命令。
 - 配置入口 `mgr.command(nameOrPath)`：`t_onRun(handler)` 配置行为钩子（`(call, runBuiltin) => result`，`null` 移除）；`t_inject(fault)` 注入故障 `{ exit?, stderr?, wait?, once?, subcommand? }`，git 可按 `subcommand` 匹配（如 `{ subcommand: 'add', exit: 128, stderr: 'index.lock', once: true }`）。
+- `t_onRun` 同时支持同步和异步执行；返回 `{ status, stdout, stderr, signal? }` 替换命令结果，返回 `undefined` 回落内置。异步入口可返回 Promise，以显式闸门控制运行中状态；同步入口不允许 Promise。`runBuiltin()` 对同步实现返回对象、异步实现返回聚合输出的 Promise，同次最多执行一次。故障优先于钩子，取消或卸载后丢弃迟到回包，用完清理钩子。模拟外部 `node --test` 输出只证明业务消费结果正确，不能据此声称实际运行了测试或测得覆盖率。
 - 用户级临时命令：`mgr.t_defineUserCommand(name, impl)`（impl 含 `i_run/i_runSync`），落 `/mock/bin` 可遮蔽系统命令，须先 mock lite-fs，卷复位即清。
+
+- 超时竞态可显式 `liteChildProcess.t_mock({ timers: liteTimer })` 接入独立时钟，卸载后推进时钟确认没有迟到事件；不要用真实超时与 setImmediate 抢先后。socket 取消可观察 `liteServer.t_requests()` 的 aborted/finished，卸载关闭可等待服务 close，不通过固定睡眠猜测。
 
 ### lite-process：进程环境
 

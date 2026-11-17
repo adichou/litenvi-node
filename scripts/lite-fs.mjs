@@ -23,6 +23,7 @@
 // 黑盒的同步读面。
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // 目录树节点深拷贝：快照与恢复两侧隔离（卷内后续变更不污染快照、恢复不与快照共享引用）
 // 私有方法：复制目录树快照；仅在本文件实现中使用，不导出。
@@ -660,6 +661,13 @@ const facade = new Proxy({}, {
         if (!memoryFn && !realFn)
             return fs[prop];
         return (...args) => {
+            // URL 路径参数归一：真实 fs 接受 file: URL 对象（readFileSync(new URL(...)) 是
+            // 配置守护的约定读取形态），mock 分派与内存实现统一转为真实路径字符串——
+            // 门面身份契约：mock 与未 mock 对同一调用行为一致，URL 不再被误当无路径参数
+            // 落进内存卷（file:///... 字符串永远不在卷内，读必 ENOENT）。
+            if (args[0] instanceof URL && args[0].protocol === 'file:') {
+                args = [fileURLToPath(args[0]), ...args.slice(1)];
+            }
             if (prop === 'copyFileSync' && typeof args[0] === 'string' && typeof args[1] === 'string' && !f_scoped(args[0]) && f_scoped(args[1])) {
                 return f_memory.f_copyFromReal(...args);
             }

@@ -10,6 +10,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync as nativeSpawnSync, spawn as nativeSpawn } from 'node:child_process';
 import nativeFs from 'node:fs'; // 原生 fs（沿用来源用例命名）
+import { readFileSync as nativeReadFileSync, writeFileSync as nativeWriteFileSync, existsSync as nativeExistsSync } from 'node:fs'; // 具名身份绑定（lite-cmd-node 来源用例的接口身份对照）
+import net from 'node:net'; // 端口探测（lite-server 来源用例的 f_freePort）
+import { t_urlInjectionRequest } from '../lite-http-helpers.mjs';
 import realFs from 'node:fs'; // 同一模块的别名：保留 lite-fs/lite-cmd-node 来源用例的既有命名
 import os from 'node:os';
 import path from 'node:path';
@@ -41,6 +44,22 @@ const REAL_ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.ur
 // ---------- lite-fs：真实 fs 对照（自 lite-fs.test.mjs 迁入） ----------
 
 const ROOT = '/data/lite-fs-root'; // 内存卷路径（真实磁盘不存在的绝对路径）
+
+/** 场景：黑名单边界——排除目录内走真实 fs，排除外落内存卷，两侧互不串扰。 */
+test('排除目录系统本体：mock 后读源码文件原样走真实 fs、不经内存卷', () => {
+  // 输入：mock 黑名单（排除本测试目录）后读排除目录内的源码文件、查卷内路径
+  liteFs.t_mock({ exclude: [EXCLUDED] });
+  try {
+    // 预期 1：排除目录内真实文件可见（走真实 fs）
+    assert.equal(liteFs.existsSync(selfFile), true, '排除目录内真实文件应仍可见');
+    // 预期 2：排除目录读取内容与真实 fs 一致
+    assert.equal(liteFs.readFileSync(selfFile, 'utf8'), realFs.readFileSync(selfFile, 'utf8'), '排除目录读取应与真实 fs 一致');
+    // 预期 3：排除外路径走内存卷（真实磁盘本无此文件，卷内也未创建）
+    assert.equal(liteFs.existsSync(`${ROOT}/x`), false, '排除外路径应走内存卷（真实磁盘本无此文件）');
+  } finally {
+    liteFs.t_unmock();
+  }
+});
 
 /** 场景：目录项类型与排除目录复制行为在内存卷与真实文件系统间一致。 */
 test('目录项类型和从排除目录复制到内存卷与真实文件系统一致', () => {
@@ -471,7 +490,7 @@ test('真实 child_process 对照：参数校验、输入流、暂停恢复与�
     await new Promise(resolve => paused.once('spawn', () => queueMicrotask(resolve)));
     const stop = paused.kill('SIGSTOP');
     paused.stdin.write('paused-');
-    await new Promise(resolve => setTimeout(resolve, 40));
+    await Promise.race([signal.done, new Promise(resolve => setTimeout(resolve, 40))]);
     const stopped = { stdout: signal.state.stdout, close: signal.state.close,
       exitCode: paused.exitCode, signalCode: paused.signalCode, exists: paused.kill(0) };
     let continued = false;
@@ -488,7 +507,7 @@ test('真实 child_process 对照：参数校验、输入流、暂停恢复与�
       await new Promise(resolve => child.once('spawn', () => queueMicrotask(resolve)));
       child.kill('SIGSTOP');
       child.kill(fatal);
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await Promise.race([observed.done, new Promise(resolve => setTimeout(resolve, 20))]);
       const beforeContinue = { close: observed.state.close, exists: child.kill(0) };
       if (fatal !== 'SIGKILL') child.kill('SIGCONT');
       await observed.done;
@@ -791,7 +810,7 @@ test('真实 execFile 对照：超时、取消和回调仅一次', async () => {
     const results = [];
     for (const abort of [false, true]) {
       const controller = new AbortController();
-      let callbacks = 0;
+      let callbacks = 0, closed;
       const promise = new Promise(resolve => {
         const child = liteChildProcess.execFile(memory ? 'node' : process.execPath, ['-e', 'setInterval(() => {}, 1000)'],
           { env: t_nativeReferenceEnv(), ...(abort ? { signal: controller.signal } : { timeout: 20 }) }, (error, stdout, stderr) => {
@@ -799,10 +818,11 @@ test('真实 execFile 对照：超时、取消和回调仅一次', async () => {
             results.push({ code: error.code, name: error.name, killed: error.killed, signal: error.signal, stdout, stderr });
             resolve(child);
           });
+        closed = new Promise(resolveClose => child.once('close', resolveClose));
       });
       if (abort) controller.abort();
       const child = await promise;
-      await new Promise(resolve => setTimeout(resolve, 5));
+      await closed;
       results.push({ callbacks, killed: child.killed });
     }
     return results;
@@ -1033,6 +1053,206 @@ test('真实 Node 对照：stdin 脚本执行与 -p 求值打印', async () => {
       assert.deepEqual(await scenario(true), expected, 'node stdin 与 -p 行为应与真实 Node 一致');
     } finally { liteChildProcess.t_unmock(); liteFs.t_unmock(); }
   } finally { liteChildProcess.t_unmock(); liteFs.t_unmock(); }
+});
+
+
+// ---------- lite-cmd-node：原生 fs 身份对照与端口观察（自 lite-cmd-node.test.mjs 迁入） ----------
+
+// 逐用例装配：命令集安装（幂等，模块顶部已装）+ 内存卷（命令执行寻址依赖）+ spawn 边界
+function f_setup() {
+  t_installNodeCommands();
+  t_installOsCommands();
+  liteFs.t_mock({ exclude: [EXCLUDED] });
+  liteChildProcess.t_mock();
+  return () => {
+    liteChildProcess.t_unmock();
+    liteFs.t_unmock();
+  };
+}
+
+// 夹具工厂：真实目录提供入口源码，共享 liteFs 门面承接内存文件副作用。
+const liteFsUrl = new URL('../../lite-fs.mjs', import.meta.url).href;
+let fixtureSeq = 0;
+function f_writeFixture(code) {
+  const name = path.join(EXCLUDED, `lite-cmd-node-fixture-${process.pid}-${++fixtureSeq}.mjs`);
+  realFs.writeFileSync(name, `import liteFs from '${liteFsUrl}';\n${code}\n`);
+  return name;
+}
+
+/** 场景：覆盖率范围旗标把统计限定在指定 glob 内——范围外真实模块不计入覆盖率表，等号与空格取值均可。 */
+test('node --test 覆盖率范围：include/exclude glob 生效', async () => {
+  const foreignDir = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-cov-foreign-'));
+  const foreign = path.join(foreignDir, 'foreign.mjs');
+  realFs.writeFileSync(foreign, 'export const v = 1;\n');
+  const fixture = f_writeFixture(`
+    import { test } from 'node:test';
+    import { v } from '${pathToFileURL(foreign).href}';
+    test('scope', function scope() { if (v !== 1) throw new Error('范围外模块应真实加载'); });
+  `);
+  const done = f_setup();
+  const run = async args => {
+    const child = liteChildProcess.spawn('node', args);
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const closed = await liteChildProcess.waitForClose(child);
+    return { ...closed, stdout, stderr };
+  };
+  try {
+    const dir = path.dirname(fixture);
+    const foreignReal = realFs.realpathSync(foreignDir); // 覆盖率按 realpath 匹配（/var → /private/var）
+    // 输入：默认运行、include 锚定夹具目录（等号取值）、exclude 排除范围外目录（空格取值，真实路径）。
+    const all = await run(['--test', '--experimental-test-coverage', fixture]);
+    const scoped = await run(['--test', '--experimental-test-coverage', `--test-coverage-include=${dir}/**`, fixture]);
+    const excluded = await run(['--test', '--experimental-test-coverage', '--test-coverage-exclude', `${foreignReal}/**`, fixture]);
+    // 预期 1：默认运行把加载到的范围外真实模块计入覆盖率表。
+    assert.equal(all.code, 0, `范围用例应通过：${all.stderr}`);
+    assert.match(all.stdout, /foreign\.mjs/, '默认运行应把范围外真实模块计入覆盖率');
+    // 预期 2：include 锚定后范围外模块消失，夹具自身仍被统计。
+    assert.doesNotMatch(scoped.stdout, /foreign\.mjs/, 'include 应把范围外模块排除出覆盖率');
+    assert.match(scoped.stdout, /lite-cmd-node-fixture-[^.]*\.mjs/, 'include 后夹具自身仍应统计');
+    // 预期 3：exclude（空格取值）同样把范围外模块排除。
+    assert.doesNotMatch(excluded.stdout, /foreign\.mjs/, 'exclude 应把范围外模块排除出覆盖率');
+    assert.match(excluded.stdout, /lite-cmd-node-fixture-[^.]*\.mjs/, 'exclude 不应波及夹具自身统计');
+  } finally { done(); realFs.unlinkSync(fixture); realFs.rmSync(foreignDir, { recursive: true, force: true }); }
+});
+
+/** 场景：普通 import 在宿主中加载源码，入口可重复执行，并发命令各自使用参数与输出管道。 */
+test('普通 import：共享宿主全局、重复入口执行、并发输出与宿主环境恢复', async () => {
+  const marker = Symbol.for('litenvi-node-native-import');
+  globalThis[marker] = { count: 0 };
+  const original = { argv: process.argv, env: process.env, cwd: process.cwd(), exitCode: process.exitCode,
+    log: console.log, timer: setTimeout, readFile: realFs.readFileSync, exit: process.exit };
+  const fixture = f_writeFixture(`
+    const state = globalThis[Symbol.for('litenvi-node-native-import')];
+    state.count++;
+    await new Promise(resolve => setTimeout(resolve, Number(process.argv[2])));
+    console.log(JSON.stringify({ tag: process.env.LITE_IMPORT_TAG, arg: process.argv[3], count: state.count }));
+  `);
+  const done = f_setup();
+  const launch = (tag, delay) => {
+    const child = liteChildProcess.spawn('node', [fixture, String(delay), tag], { env: { LITE_IMPORT_TAG: tag } });
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    return liteChildProcess.waitForClose(child).then(closed => ({ closed, output }));
+  };
+  try {
+    // 输入：同一入口连续执行两次，再并发执行两次，ES 模块源码直接访问宿主全局标记
+    const first = await launch('first', 1);
+    const second = await launch('second', 1);
+    const parallel = await Promise.all([launch('slow', 10), launch('fast', 1)]);
+    // 预期 1：每次入口真实执行且正常退出
+    for (const result of [first, second, ...parallel]) assert.deepEqual(result.closed, { code: 0, signal: null }, '普通 import 应成功执行');
+    assert.equal(globalThis[marker].count, 4, '入口应共享宿主全局且每次重新执行');
+    // 预期 2：并发命令的参数、env 与 stdout 不串到其他命令
+    assert.deepEqual([first, second, ...parallel].map(result => {
+      const { tag, arg } = JSON.parse(result.output);
+      return [tag, arg];
+    }), [['first', 'first'], ['second', 'second'], ['slow', 'slow'], ['fast', 'fast']], '并发输出与参数应对应各自命令');
+    // 预期 3：宿主的 process 字段保持原来的值与对象
+    assert.equal(process.argv, original.argv, '宿主 argv 应恢复');
+    assert.equal(process.env, original.env, '宿主 env 应恢复');
+    assert.equal(process.cwd(), original.cwd, '宿主 cwd 应保持不变');
+    assert.equal(process.exitCode, original.exitCode, '宿主退出码应保持不变');
+    assert.equal(console.log, original.log, '宿主 console 方法应恢复');
+    assert.equal(setTimeout, original.timer, '宿主定时器方法应恢复');
+    assert.equal(realFs.readFileSync, original.readFile, '宿主 fs 方法应恢复');
+    assert.equal(process.exit, original.exit, '宿主 exit 方法应恢复');
+  } finally {
+    done();
+    realFs.unlinkSync(fixture);
+    delete globalThis[marker];
+  }
+});
+
+/** 场景：虚拟 Node 命令运行期间不替换原生 fs，CJS、ESM 默认和具名导入保持同一原生接口。
+ * 夹具只观测原生接口身份，不通过原生 fs 读写业务文件；stdin 闸门保持命令运行以检查中间状态。 */
+test('显式文件边界：运行中原生 fs 保持不变', { timeout: 5000 }, async () => {
+  liteChildProcess.t_unmock();
+  liteFs.t_unmock();
+  const original = { read: realFs.readFileSync, write: realFs.writeFileSync, exists: realFs.existsSync };
+  const fixture = f_writeFixture(`
+    import fs from 'node:fs';
+    import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+    import { createRequire } from 'node:module';
+    const cjsFs = createRequire(import.meta.url)('fs');
+    console.log(JSON.stringify({
+      esm: readFileSync === fs.readFileSync && writeFileSync === fs.writeFileSync && existsSync === fs.existsSync,
+      cjs: cjsFs.readFileSync === fs.readFileSync && cjsFs.writeFileSync === fs.writeFileSync && cjsFs.existsSync === fs.existsSync,
+    }));
+    await new Promise(resolve => process.stdin.once('data', resolve));
+    console.log('released');
+  `);
+  const done = f_setup();
+  let child, closed;
+  try {
+    // 输入：启动夹具，收到接口观测结果后仍阻塞于 stdin，不使用固定睡眠猜测运行阶段。
+    child = liteChildProcess.spawn('node', [fixture]);
+    closed = liteChildProcess.waitForClose(child);
+    let output = '';
+    const ready = new Promise((resolve, reject) => {
+      child.stdout.on('data', chunk => {
+        output += chunk;
+        if (output.includes('\n')) {
+          try { resolve(JSON.parse(output.split('\n')[0])); }
+          catch (error) { reject(error); }
+        }
+      });
+      child.once('error', reject);
+      child.once('close', () => reject(new Error('夹具未报告接口身份便提前退出')));
+    });
+    const imports = await ready;
+    // 预期 1：命令确实仍在运行，原生默认对象和 ESM 具名导出均未被换成包装函数。
+    assert.equal(child.exitCode, null, 'stdin 闸门释放前虚拟 Node 应保持运行');
+    assert.equal(realFs.readFileSync, original.read, '命令运行中不得替换原生 readFileSync');
+    assert.equal(realFs.writeFileSync, original.write, '命令运行中不得替换原生 writeFileSync');
+    assert.equal(realFs.existsSync, original.exists, '命令运行中不得替换原生 existsSync');
+    assert.equal(nativeReadFileSync, original.read, '命令运行中不得改写 ESM 具名 readFileSync');
+    assert.equal(nativeWriteFileSync, original.write, '命令运行中不得改写 ESM 具名 writeFileSync');
+    assert.equal(nativeExistsSync, original.exists, '命令运行中不得改写 ESM 具名 existsSync');
+    assert.deepEqual(imports, { esm: true, cjs: true }, '脚本中的 CJS 与 ESM 导入应保持一致的原生 fs 接口');
+
+    // 输入：显式释放 stdin 闸门，等待命令通过正常生命周期结束。
+    child.stdin.end('release');
+    // 预期 2：命令正常退出，期间保留的原生接口在退出后仍保持原样。
+    assert.deepEqual(await closed, { code: 0, signal: null }, '释放闸门后虚拟 Node 应正常结束');
+    assert.ok(output.endsWith('released\n'), '脚本应在闸门释放后继续执行到结尾');
+    assert.equal(realFs.readFileSync, original.read, '命令结束后原生 readFileSync 应保持原样');
+    assert.equal(nativeReadFileSync, original.read, '命令结束后 ESM 具名 readFileSync 应保持原样');
+  } finally {
+    child?.stdin.end('cleanup');
+    if (closed) await closed;
+    done();
+    realFs.unlinkSync(fixture);
+  }
+});
+
+/** 场景：终止持有监听服务的脚本时，服务资源也随命令释放。 */
+test('活动服务清理：终止 Node 后关闭其监听端口', async () => {
+  const done = f_setup();
+  liteServer.t_mock();
+  const serverUrl = new URL('../../lite-server.mjs', import.meta.url).href;
+  const fixture = f_writeFixture(`
+    import server from '${serverUrl}';
+    server.createServer((_req, res) => res.end('active')).listen(0, () => console.log('ready'));
+  `);
+  try {
+    // 输入：脚本保持服务监听，从公共子进程句柄终止它
+    const child = liteChildProcess.spawn('node', [fixture]);
+    const closed = liteChildProcess.waitForClose(child);
+    await new Promise(resolve => child.stdout.once('data', resolve));
+    const port = liteServer.t_port();
+    assert.ok(port > 0, '终止前服务应有实际监听端口');
+    child.kill();
+    // 预期：子进程以信号结束，服务监听已解除
+    assert.deepEqual(await closed, { code: null, signal: 'SIGTERM' }, '终止信号应反映在子进程结果上');
+    const { default: http } = await import('node:http');
+    const connection = await new Promise(resolve => {
+      http.get({ hostname: '127.0.0.1', port }, response => { response.resume(); resolve('connected'); })
+        .on('error', error => resolve(error.code));
+    });
+    assert.equal(connection, 'ECONNREFUSED', '命令结束后原端口应拒绝新连接');
+  } finally { done(); liteServer.t_unmock(); realFs.unlinkSync(fixture); }
 });
 
 // ---------- lite-cmd-os：真实 OS 命令对照（自 lite-cmd-os.test.mjs 迁入） ----------
@@ -1908,6 +2128,7 @@ test('真实 Node 对照：同延迟 FIFO、setInterval 额外实参与 clear �
   // 输入：同延迟定时器与 interval 各形态经内存卷与真实 node 执行对比。
   const scenario = (world) => {
     const log = [];
+    const finished = Promise.withResolvers();
     world.setTimeout(() => log.push('zero-1'), 0);
     world.setTimeout(() => log.push('zero-2'), 0);
     world.setTimeout((a, b) => log.push(['timeout-args', a, b]), 30, 'x', 2);
@@ -1917,18 +2138,18 @@ test('真实 Node 对照：同延迟 FIFO、setInterval 额外实参与 clear �
     world.clearTimeout(undefined); // 未知句柄 no-op
     const ticks = [];
     const interval = world.setInterval((tag) => ticks.push(tag), 20, 'tick');
-    world.setTimeout(() => { world.clearInterval(interval); world.clearInterval(interval); }, 45);
-    return { log, ticks };
+    world.setTimeout(() => { world.clearInterval(interval); world.clearInterval(interval); finished.resolve(); }, 45);
+    return { log, ticks, done: finished.promise };
   };
   const waitFor = async (world) => {
-    const { log, ticks } = scenario(world);
-    await world.settle(100);
+    const { log, ticks, done } = scenario(world);
+    if (world.settle) await world.settle(100);
+    await done;
     return { log, ticks };
   };
   const nativeWorld = {
     setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout,
     setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval,
-    settle: ms => new Promise(resolve => globalThis.setTimeout(resolve, ms)),
   };
   const expected = await waitFor(nativeWorld);
   liteTimer.t_unmock();
@@ -2231,4 +2452,419 @@ test('真实 Server 对照：未运行 close 回调错误一致；handler 抛错
       await new Promise(resolve => server.close(resolve));
     }
   } finally { liteHttp.t_unmock(); liteServer.t_unmock(); }
+});
+
+// ---------- lite-server：原生 HTTP 客户端独立观察（自 lite-server.test.mjs 迁入） ----------
+
+// 内存路由客户端：与 lite-server 同路由域（不经 socket）
+async function f_get(port, path) {
+  return new Promise((resolve, reject) => {
+    const req = liteHttp.request({ host: '127.0.0.1', port, path }, (res) => {
+      let data = '';
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body: data, headers: res.headers }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+// 真实 socket 客户端：浏览器等真实流量的最小替身——真 TCP 到达 socket 前端
+function f_realGet(port, path, { destroyAfter = 0 } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.get({ host: '127.0.0.1', port, path }, (res) => {
+      let data = '';
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body: data, headers: res.headers }));
+    });
+    req.on('error', reject);
+    if (destroyAfter > 0) setTimeout(() => req.destroy(), destroyAfter);
+  });
+}
+
+function f_realPost(port, path, body) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path, method: 'POST' }, (res) => {
+      let data = '';
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body: data, headers: res.headers }));
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+async function f_withBoard(handler, run) {
+  liteHttp.t_mock();
+  liteServer.t_mock();
+  const server = liteServer.createServer(handler).listen(0);
+  await new Promise((resolve) => server.once('listening', resolve)); // 真实绑定异步：就绪后才取实际端口
+  try {
+    return await run(server.port);
+  } finally {
+    liteHttp.t_unmock();
+    liteServer.t_unmock();
+  }
+}
+
+const f_boardHandler = (req, res) => {
+  const at = req.url.indexOf('?');
+  const path = at === -1 ? req.url : req.url.slice(0, at);
+  if (path === '/api/echo') {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ ok: true, url: req.url, echo: body || null }));
+    });
+    return;
+  }
+  if (path === '/style.css') {
+    res.writeHead(200, { 'Content-Type': 'text/css', 'Cache-Control': 'no-store' });
+    res.end('body{}');
+    return;
+  }
+  res.writeHead(404, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ error: '未知接口' }));
+};
+
+// 私有：等待只读观测条件；超时属于失败边界，不重试任何业务操作。
+async function f_waitUntil(predicate) {
+  const deadline = AbortSignal.timeout(5000);
+  while (!predicate()) { deadline.throwIfAborted(); await new Promise(resolve => setImmediate(resolve)); }
+}
+const f_freePort = () => new Promise((resolve, reject) => {
+  const probe = net.createServer();
+  probe.on('error', reject);
+  probe.listen(0, '127.0.0.1', () => {
+    const { port } = probe.address();
+    probe.close(() => resolve(port));
+  });
+});
+
+/** 场景：多个服务实例按域名与端口隔离路由，单实例关闭不影响其余。 */
+test('多个服务按域名和端口独立路由，关闭互不影响', async () => {
+  // 输入：起多个不同域名/端口的服务，逐个关闭并发请求。
+  liteHttp.t_mock();
+  liteServer.t_mock();
+  const board = liteServer.createServer((_req, res) => res.end('board')).listen(0);
+  await new Promise(resolve => board.once('listening', resolve));
+  const apple = liteServer.createServer((req, res) => res.end(`apple:${req.url}`));
+  const ready = new Promise(resolve => apple.once('listening', resolve));
+  apple.listen({ host: 'api.example.test', port: 80, virtual: true });
+  await ready;
+  try {
+    assert.deepEqual(apple.address(), { address: 'api.example.test', family: 'virtual', port: 80 }, '虚拟服务应公开监听地址');
+    assert.equal((await f_realGet(board.port, '/')).body, 'board', '真实回环请求应抵达看板');
+    assert.equal((await t_urlInjectionRequest(liteHttp, { hostname: 'api.example.test', path: '/builds?x=1' })).body, 'apple:/builds?x=1', '指定域名应抵达模拟服务');
+    const wrong = await new Promise(resolve => liteHttp.request({ hostname: 'other.example.test', port: 80, path: '/' }).on('error', error => resolve(error.code)).end());
+    assert.equal(wrong, 'ECONNREFUSED', '其他域名不能误路由');
+    await new Promise(resolve => apple.close(resolve));
+    assert.equal(apple.address(), null, '虚拟服务关闭后不应保留监听地址');
+    assert.equal((await f_get(board.port, '/')).body, 'board', '关闭模拟服务不能影响看板');
+  } finally { liteServer.t_unmock(); liteHttp.t_unmock(); }
+});
+
+/** 场景：回环服务与同端口虚拟服务按域名隔离，互不串扰。 */
+test('两个回环服务及同端口不同域名的虚拟服务彼此隔离', async () => {
+  // 输入：回环服务与同端口双域名虚拟服务并行注册并交替请求。
+  liteHttp.t_mock(); liteServer.t_mock();
+  const first = liteServer.createServer((_req, res) => res.end('first')).listen(0);
+  const second = liteServer.createServer((_req, res) => res.end('second')).listen(0);
+  await Promise.all([first, second].map(server => new Promise(resolve => server.once('listening', resolve))));
+  const a = liteServer.createServer((_req, res) => res.end('a'));
+  const b = liteServer.createServer((_req, res) => res.end('b'));
+  await Promise.all([new Promise(resolve => a.listen({ virtual: true, host: 'a.test', port: 443 }, resolve)), new Promise(resolve => b.listen({ virtual: true, host: 'b.test', port: 443 }, resolve))]);
+  try {
+    assert.equal((await f_realGet(first.port, '/')).body, 'first', '第一个回环服务应保持可达');
+    assert.equal((await f_realGet(second.port, '/')).body, 'second', '第二个回环服务应保持可达');
+    assert.equal((await t_urlInjectionRequest(liteHttp, { hostname: 'a.test', port: 443, path: '/' })).body, 'a', '域名 a 应路由到 a 服务');
+    assert.equal((await t_urlInjectionRequest(liteHttp, { hostname: 'b.test', port: 443, path: '/' })).body, 'b', '相同端口的域名 b 应路由到 b 服务');
+    const duplicate = liteServer.createServer((_req, res) => res.end());
+    const error = new Promise(resolve => duplicate.once('error', resolve));
+    duplicate.listen({ virtual: true, host: 'A.TEST', port: 443 });
+    assert.equal((await error).code, 'EADDRINUSE', '相同域名端口不能重复监听');
+    assert.throws(() => duplicate.listen({ virtual: true, host: '', port: 0 }), /域名和端口/, '虚拟地址必须完整有效');
+    await new Promise(resolve => first.close(resolve));
+    assert.equal((await f_realGet(second.port, '/')).body, 'second', '关闭一个服务不得关闭另一个');
+  } finally { liteServer.t_unmock(); liteHttp.t_unmock(); }
+});
+
+/** 场景：真实 socket 回灌管线与观测账本——真 TCP 流量回包来自真实 handler，账本按契约记录。 */
+test('socket 前端：真 TCP GET/POST 回灌管线、账本契约、缓存头区分', async () => {
+  // 输入：真 socket 客户端 GET API / GET 静态 / POST API，随后读账本并 resetRequests
+  const out = await f_withBoard(f_boardHandler, async (port) => {
+    const api = await f_realGet(port, '/api/echo?a=1');
+    const asset = await f_realGet(port, '/style.css');
+    const post = await f_realPost(port, '/api/echo', '载荷');
+    // 账本断言须在 run 内完成：withBoard 收尾 unmock 后账本随实例丢弃
+    const recs = liteServer.t_requests().filter((r) => r.path === '/api/echo' || r.path === '/style.css');
+    assert.equal(liteServer.liveRequests, undefined, '活账本不应作为公共方法导出');
+    const snapshot = liteServer.t_requests();
+    liteServer.t_resetRequests(); // 须在 run 内清空：unmock 后无内存账本
+    return { api, asset, post, port, recs, snapshotLength: snapshot.length, clearedLength: liteServer.t_requests().length };
+  });
+  // 预期 1：真实 socket 请求应答真实 handler 的 200
+  assert.equal(out.api.status, 200, '真实 socket 请求应答真实 handler 的 200');
+  // 预期 2：GET 回包内容来自真实路由代码
+  assert.deepEqual(JSON.parse(out.api.body), { ok: true, url: '/api/echo?a=1', echo: null }, 'GET 回包内容应来自真实路由代码');
+  // 预期 3：/api/ 保持服务端 no-store
+  assert.equal(out.api.headers['cache-control'], 'no-store', '/api/ 保持服务端 no-store（故障与轮询依赖新鲜回包）');
+  // 预期 4：非 /api/ 静态资源覆盖为可缓存
+  assert.equal(out.asset.headers['cache-control'], 'public, max-age=3600', '非 /api/ 静态资源应覆盖为可缓存');
+  // 预期 5：POST 请求体经回灌管线到达 handler
+  assert.equal(JSON.parse(out.post.body).echo, '载荷', 'POST 请求体应经回灌管线到达 handler');
+  // 预期 6：content-length 按回写字节重算
+  assert.equal(Number(out.post.headers['content-length']), Buffer.byteLength(out.post.body), 'content-length 应按回写字节重算');
+  const recs = out.recs;
+  // 预期 7：账本记录全部到达请求
+  assert.equal(recs.length, 3, 'socket 前端账本应记录全部到达请求');
+  const [api, asset, post] = recs;
+  // 预期 8：账本契约（path 不含查询串、query 单列、body 为请求体文本）
+  assert.deepEqual(
+    [api.method, api.path, api.query, api.body, asset.query, post.body],
+    ['GET', '/api/echo', '?a=1', null, '', '载荷'],
+    '账本契约：path 不含查询串（query 单列）、body 为请求体文本',
+  );
+  // 预期 9：完成请求回填 status
+  assert.equal(api.status, 200, '完成请求回填 status');
+  // 预期 10：response 带解析后的 JSON 回包
+  assert.equal(api.response.json.ok, true, 'response 应带解析后的 JSON 回包');
+  // 预期 11：真实路由产物同引 serverResponse
+  assert.equal(api.serverResponse, api.response, '真实路由产物应同引 serverResponse');
+  // 预期 12：清空内部账本不改变已获取的快照
+  assert.equal(out.snapshotLength, 3, '已获取的请求快照应保留原有记录');
+  // 预期 13：清空后重新读取快照应为空
+  assert.equal(out.clearedLength, 0, 'resetRequests 后的新快照应为空');
+});
+
+/** 场景：故障对 socket 流量生效——传输层 503 与服务端 wait 闸门对真 TCP 客户端同样生效。 */
+test('socket 故障：传输层 503/服务端闸门对真 socket 生效、账本 serverResponse 区分', async () => {
+  // 输入：注入传输层 503（once）后真 socket 两次请求；再注入服务端 wait 闸门，观察早退与放行
+  const out = await f_withBoard(f_boardHandler, async (port) => {
+    liteHttp.t_inject({ method: 'GET', path: '/api/echo', status: 503, body: { error: '传输不可用' }, once: true });
+    const faulted = await f_realGet(port, '/api/echo');
+    const recovered = await f_realGet(port, '/api/echo');
+    const gate = Promise.withResolvers();
+    const removeGate = liteServer.t_inject({ method: 'GET', path: '/style.css', wait: gate.promise });
+    const held = f_realGet(port, '/style.css');
+    const early = await Promise.race([held, new Promise(resolve => setTimeout(() => resolve({ held: true }), 200))]);
+    gate.resolve();
+    const released = await held;
+    removeGate();
+    const recs = liteServer.t_requests();
+    return { faulted, recovered, early, released, recs };
+  });
+  // 预期 1：传输层故障替换真 socket 回包
+  assert.equal(out.faulted.status, 503, '传输层故障应替换真 socket 回包');
+  // 预期 2：错误正文来自注入规则
+  assert.equal(JSON.parse(out.faulted.body).error, '传输不可用', '错误正文应来自注入规则');
+  // 预期 3：once 自毁后回到真实回包
+  assert.equal(out.recovered.status, 200, 'once 自毁后回到真实回包');
+  // 预期 4：闸门放行前真 socket 无回包
+  assert.equal(out.early.held, true, 'wait 闸门放行前真 socket 不应有回包');
+  // 预期 5：放行后回包送达真实 socket
+  assert.equal(out.released.status, 200, '放行后回包送达真实 socket');
+  const recs = out.recs;
+  const faultRec = recs.find((r) => r.path === '/api/echo' && r.status === 503);
+  const gateRec = recs.find((r) => r.path === '/style.css');
+  // 预期 6：故障回包入账
+  assert.ok(faultRec, '故障回包应入账');
+  // 预期 7：账本 response 为最终送达回包
+  assert.equal(faultRec.response.json.error, '传输不可用', '账本 response 为最终送达回包');
+  // 预期 8：故障替换时账本缺 serverResponse（仅真实路由产物）
+  assert.equal(faultRec.serverResponse, undefined, '故障替换时账本缺 serverResponse（仅真实路由产物）');
+  // 预期 9：闸门请求入账
+  assert.ok(gateRec, '闸门请求应入账');
+  // 预期 10：闸门放行后账本回填
+  assert.equal(gateRec.status, 200, '闸门放行后账本回填');
+  // 预期 11：真实回包账本补 serverResponse
+  assert.equal(gateRec.serverResponse, gateRec.response, '真实回包账本补 serverResponse');
+});
+
+/** 场景：socket 中断联动取消——闸门挂起期间客户端弃连，放行后不投递、账本停在 status 0。 */
+test('socket 中断：弃连联动取消投递、账本停在 status 0、服务继续可用', async () => {
+  // 输入：闸门挂起期间真 socket 客户端 50ms 后弃连，放行闸门再发起后续请求
+  const out = await f_withBoard(f_boardHandler, async (port) => {
+    const gate = Promise.withResolvers();
+    const removeGate = liteServer.t_inject({ method: 'GET', path: '/api/echo', wait: gate.promise });
+    const dropping = f_realGet(port, '/api/echo', { destroyAfter: 50 }).catch((error) => ({ code: error.code }));
+    const dropped = await dropping;
+    await f_waitUntil(() => liteServer.t_requests().some(record => record.path === '/api/echo' && record.aborted));
+    gate.resolve();
+    await f_waitUntil(() => liteServer.t_requests().some(record => record.path === '/api/echo' && record.finished));
+    const after = await f_realGet(port, '/style.css');
+    removeGate();
+    const rec = liteServer.t_requests().find((r) => r.path === '/api/echo');
+    return { dropped, after, rec };
+  });
+  // 预期 1：弃连客户端见到连接错误而非回包
+  assert.ok(out.dropped.code !== undefined, '弃连客户端应见连接错误而非回包');
+  // 预期 2：中断后服务继续可用
+  assert.equal(out.after.status, 200, '中断后服务应继续可用');
+  const rec = out.rec;
+  // 预期 3：中断请求在账本
+  assert.ok(rec, '中断请求应在账本');
+  // 预期 4：中断请求账本停在 status 0（对齐旧 route.abort 观测）
+  assert.equal(rec.status, 0, '中断请求账本停在 status 0（对齐旧 route.abort 观测）');
+  // 预期 5：中断请求不回填 response
+  assert.equal(rec.response, undefined, '中断请求不回填 response');
+});
+
+/** 场景：闸门失败按管线异常收场——wait promise 拒绝时连接拆除、账本停在 status 0。 */
+test('闸门失败：wait 拒绝按请求错误收场、连接拆除、账本不回填', async () => {
+  // 输入：注入 wait 已拒绝的闸门后真 socket 请求
+  const out = await f_withBoard(f_boardHandler, async (port) => {
+    const boom = Promise.reject(new Error('闸门崩溃'));
+    boom.catch(() => undefined); // 预挂兜底：注入期无请求消费不触发 unhandledRejection，真实 await 仍按拒绝传播
+    const removeGate = liteServer.t_inject({ method: 'GET', path: '/api/echo', wait: boom });
+    const failed = await f_realGet(port, '/api/echo').catch((error) => ({ code: error.code }));
+    removeGate();
+    const rec = liteServer.t_requests().find((r) => r.path === '/api/echo');
+    return { failed, rec };
+  });
+  // 预期 1：闸门失败按请求错误收场（连接拆除）
+  assert.ok(out.failed.code !== undefined, '闸门失败应按请求错误收场（连接拆除）');
+  // 预期 2：管线异常账本停在 status 0
+  assert.equal(out.rec.status, 0, '管线异常账本停在 status 0');
+  // 预期 3：管线异常不回填 response
+  assert.equal(out.rec.response, undefined, '管线异常不回填 response');
+});
+
+/** 场景：防误用守卫——lite-server mock 但 lite-http 未 mock 时 socket 前端明确报错，不外联。 */
+test('防误用守卫：lite-http 未 mock 时 socket 前端 500 明确报错、无真实外联', async () => {
+  // 输入：仅 mock lite-server 并监听（lite-http 全程未 mock），真 socket 请求
+  liteServer.t_mock();
+  const server = liteServer.createServer(f_boardHandler).listen(0);
+  await new Promise((resolve) => server.once('listening', resolve));
+  try {
+    const refused = await f_realGet(server.port, '/api/echo');
+    // 预期 1：收到 500 明确报错
+    assert.equal(refused.status, 500, '未 mock lite-http 时 socket 前端应明确报错');
+    // 预期 2：报错指引先 liteHttp.t_mock()
+    assert.match(refused.body, /liteHttp\.t_mock/, '报错应指引先 liteHttp.t_mock()');
+  } finally {
+    liteServer.t_unmock();
+  }
+  // 预期 3：本用例全程 lite-http 未 mock
+  assert.equal(liteHttp.isMocked(), false, '本用例全程 lite-http 未 mock');
+});
+
+/** 场景：端口策略与关停——动态口/显式口绑定、unmock 真实关停拒连、未 mock 门面空态。 */
+test('端口策略与关停：动态/显式口、unmock 关停拒连、未 mock 空态', async () => {
+  // 输入：未 mock 时查询端口与账本
+  // 预期 1：无绑定端口（null）
+  assert.equal(liteServer.t_port(), null, '未 mock 时无绑定端口');
+  // 预期 2：账本为空集
+  assert.deepEqual(liteServer.t_requests(), [], '未 mock 时账本为空集');
+  // 输入：第一段会话——缺省 listen 动态空闲口
+  liteHttp.t_mock();
+  liteServer.t_mock();
+  const dynamic = liteServer.createServer(f_boardHandler);
+  dynamic.listen(); // 缺省：动态空闲口
+  await new Promise((resolve) => dynamic.once('listening', resolve));
+  // 预期 3：动态口为非 0 的实际绑定值
+  assert.ok(Number.isInteger(liteServer.t_port()) && liteServer.t_port() > 0, '缺省 listen 应绑动态空闲口（非 0）');
+  // 输入：真 socket 请求动态口
+  const dynamicHit = await f_realGet(liteServer.t_port(), '/style.css');
+  // 预期 4：动态口真实可达
+  assert.equal(dynamicHit.status, 200, '动态口真实可达');
+  liteServer.t_unmock();
+  liteHttp.t_unmock();
+  // 输入：第二段会话——显式端口绑定
+  const explicit = await f_freePort();
+  liteHttp.t_mock();
+  liteServer.t_mock();
+  const pinned = liteServer.createServer(f_boardHandler).listen(explicit);
+  await new Promise((resolve) => pinned.once('listening', resolve));
+  // 预期 5：显式端口绑定该口
+  assert.equal(pinned.port, explicit, '显式端口应绑定该口');
+  // 预期 6：门面暴露实际绑定端口
+  assert.equal(liteServer.t_port(), explicit, '门面应暴露实际绑定端口');
+  // 输入：真 socket 请求显式口
+  const hit = await f_realGet(explicit, '/style.css');
+  // 预期 7：显式口真实可达
+  assert.equal(hit.status, 200, '显式口真实可达');
+  // 输入：等待真实 socket 的关闭事件，再独立验证端口拒连。
+  const closed = new Promise(resolve => pinned.once('close', resolve));
+  liteServer.t_unmock();
+  await closed;
+  const refused = await new Promise(resolve => {
+    const req = http.get({ host: '127.0.0.1', port: explicit, path: '/' }, response => { response.resume(); resolve({ connected: true }); });
+    req.on('error', error => resolve({ code: error.code }));
+  });
+  // 预期 8：unmock 后真实 socket 关停拒连
+  assert.equal(refused.code, 'ECONNREFUSED', 'unmock 后真实 socket 应关停拒连');
+  liteHttp.t_unmock();
+});
+
+/** 场景：URL 定向故障在内存直调和真实 socket 回灌中一致，保留 Host、方法与查询隔离。 */
+test('URL 回灌：两层故障、Host 来源、方法、查询与 once 一致', async () => {
+  await f_withBoard((req, res) => res.end('handler'), async port => {
+    for (const injector of [liteHttp, liteServer]) {
+      for (const client of [liteHttp, http]) {
+        const send = (path, extra = {}) => t_urlInjectionRequest(client, { hostname: '127.0.0.1', port, path, headers: { Host: `public.test:${port}` }, ...extra });
+        // 输入：socket 连接仍指向回环地址，注入 URL 使用原始 Host，并同时限定 POST 和查询串
+        injector.t_inject({ url: `http://public.test:${port}/same?a=1`, method: 'POST', status: 503, once: true });
+        const misses = [await send('/same?a=2', { method: 'POST' }), await send('/same?a=1'),
+          await send('/same?a=1', { method: 'POST', headers: { Host: `other.test:${port}` } })];
+        // 预期 1：未命中的查询、方法与 Host 不消耗 once，直调与回灌结果一致
+        assert.deepEqual(misses.map(out => out.status), [200, 200, 200], '其他 URL 或方法应收到真实回包');
+        assert.equal((await send('/same?a=1', { method: 'POST' })).status, 503, '原始 Host 的完整 URL 应命中');
+        assert.equal((await send('/same?a=1', { method: 'POST' })).status, 200, '命中后 once 应自毁');
+        // 输入：路径 URL 不限定 origin，fragment 忽略，重复查询参数顺序精确
+        const remove = injector.t_inject({ url: '/same?x=1&x=2#ignored', status: 502 });
+        // 预期 2：两条请求管线都保留路径 URL 的完整查询语义
+        assert.equal((await send('/same?x=1&x=2')).status, 502, '路径 URL 应命中任意 Host');
+        assert.equal((await send('/same?x=2&x=1')).status, 200, '查询参数顺序不能颠倒');
+        remove(); remove();
+        assert.equal((await send('/same?x=1&x=2')).status, 200, '移除 URL 规则应幂等恢复');
+      }
+    }
+    // 预期 3：服务端非法 URL 在登记时拒绝
+    for (const url of ['', 'relative', '//example.test/same', 'ftp://example.test/same', 1, {}])
+      assert.throws(() => liteServer.t_inject({ url, status: 503 }), /url/, '非法 URL 应在注入时拒绝');
+  });
+});
+
+/** 场景：URL 定向 wait 只挂起目标请求，未命中正常响应，once 在放行前已消耗。 */
+test('URL 闸门：两层 wait 只挂目标、未命中直通、once 放行前自毁', async () => {
+  await f_withBoard((req, res) => res.end('handler'), async port => {
+    for (const injector of [liteHttp, liteServer]) {
+      const gate = Promise.withResolvers();
+      const send = path => t_urlInjectionRequest(http, { hostname: '127.0.0.1', port, path });
+      injector.t_inject({ url: '/same?held=1', wait: gate.promise, once: true });
+      let settled = false;
+      // 输入：真实 socket 请求命中路径 URL 闸门，另一个查询 URL 不命中
+      const before = liteServer.t_requests().length;
+      const held = send('/same?held=1').then(out => { settled = true; return out; });
+      try {
+        await f_waitUntil(() => liteServer.t_requests().length > before);
+        assert.equal(liteServer.t_requests().length, before + 1, '目标请求应已进入回灌管线');
+        // 预期 1：目标仍等待，未命中 URL 与第二次目标请求均不被 once 闸门挂住
+        assert.equal(settled, false, '目标 URL 应等待闸门');
+        assert.equal((await send('/same?held=2')).status, 200, '其他查询应直通');
+        assert.equal((await send('/same?held=1')).status, 200, 'once 应在首个请求命中时消耗');
+      } finally { gate.resolve(); await held; }
+      // 预期 2：放行后目标仍收到真实 handler 回包
+      assert.equal((await held).body, 'handler', '闸门放行后应保留真实回包');
+    }
+  });
+});
+
+/** 场景：异步 handler 拒绝时回 500，同一服务后续请求仍能正常完成。 */
+test('异步 handler 失败：拒绝转为 500，后续请求仍成功', async () => {
+  // 输入：通过服务创建接口登记会拒绝的业务 handler，经真实 socket 请求触发
+  await f_withBoard(async (req, res) => {
+    if (req.url === '/reject') throw new Error('handler-rejected');
+    res.end('healthy');
+  }, async port => {
+    const failed = await f_realGet(port, '/reject');
+    const healthy = await f_realGet(port, '/healthy');
+    // 预期：错误作为响应可见，不破坏后续请求
+    assert.equal(failed.status, 500, '异步拒绝应得到 500');
+    assert.deepEqual(JSON.parse(failed.body), { error: 'handler-rejected' }, '回包应说明 handler 失败原因');
+    assert.equal(healthy.status, 200, '后续请求应正常响应');
+    assert.equal(healthy.body, 'healthy', '后续回包应来自 handler');
+  });
 });
