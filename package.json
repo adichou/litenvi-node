@@ -8,7 +8,8 @@
   },
   "files": [
     "scripts/*.mjs",
-    "scripts/*.cjs"
+    "scripts/*.cjs",
+    "scripts/lib/*.mjs"
   ],
   "scripts": {
     "test": "node --test \"scripts/tests/**/*.test.mjs\"",
