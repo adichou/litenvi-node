@@ -56,7 +56,7 @@ const f_write = (root, rel, text) => {
  * 置于文件首位（其余用例的 f_setup 均会 t_install，登记随进程存活）；且不 mock lite-fs——
  * ENOENT 在寻址层返回无需卷，mock 后的失败寻址会触发 /mock-cmd 持久卷惰性创建，
  * 破坏后续用例「首次 mock 时 /mock-cmd 尚不存在 → 惰性安装全部登记命令」的时序。 */
-test('未 t_install 时执行返回 ENOENT', async () => {
+test('未 t_install 时执行返回 ENOENT', async function test_未_t_install_时执行返回_ENOENT() {
   liteChildProcess.t_mock();
   try {
     // 输入：不调用 t_install，直接 spawnSync('git', ['status'])
@@ -76,7 +76,7 @@ test('未 t_install 时执行返回 ENOENT', async () => {
 });
 
 /** 场景：重复显式安装不覆盖既有脚本钩子和一次性故障，后续 Git 仍执行内置实现。 */
-test('重复 t_install 保留钩子与故障配置', () => {
+test('重复 t_install 保留钩子与故障配置', function test_重复_t_install_保留钩子与故障配置() {
   // 输入：连续两次 t_install 后检查钩子与故障配置存续。
   const done = f_setup();
   let remove;
@@ -103,7 +103,7 @@ test('重复 t_install 保留钩子与故障配置', () => {
 
 /** 场景：已跟踪文件经 rm 暂存删除，路径限定提交保留其他暂存变更。 */
   // 输入：连续两次 t_install 后检查钩子与故障配置存续。
-test('暂存删除：rm、无匹配 add 与限定提交', () => {
+test('暂存删除：rm、无匹配 add 与限定提交', function test_暂存删除_rm_无匹配_add_与限定提交() {
   // 输入：内存卷内依次执行 rm、空匹配 add 与路径限定提交。
   const done = f_setup();
   try {
@@ -133,7 +133,7 @@ test('暂存删除：rm、无匹配 add 与限定提交', () => {
 
   // 输入：内存卷内依次执行 rm、空匹配 add 与路径限定提交。
 /** 场景：删除有未保存修改或不存在的路径时拒绝且不改变任何文件。 */
-test('git rm 保护未提交修改并拒绝无匹配路径', () => {
+test('git rm 保护未提交修改并拒绝无匹配路径', function test_git_rm_保护未提交修改并拒绝无匹配路径() {
   // 输入：对含未提交修改的文件与不存在路径执行 git rm。
   const done = f_setup();
   try {
@@ -156,7 +156,7 @@ test('git rm 保护未提交修改并拒绝无匹配路径', () => {
   // 输入：对含未提交修改的文件与不存在路径执行 git rm。
 
 /** 场景：目录删除需要 -r，且未支持的选项不会静默改变文件。 */
-test('git rm 目录保护及递归删除', () => {
+test('git rm 目录保护及递归删除', function test_git_rm_目录保护及递归删除() {
   // 输入：对目录执行 git rm（含 -r 形态）。
   const done = f_setup();
   try {
@@ -176,7 +176,7 @@ test('git rm 目录保护及递归删除', () => {
 });
 
 /** 场景：Git 故障按子命令命中，同步与异步执行共享规则且忽略支持的全局选项。 */
-test('Git 故障按子命令匹配并只在命中时消费', async () => {
+test('Git 故障按子命令匹配并只在命中时消费', async function test_Git_故障按子命令匹配并只在命中时消费() {
   // 输入：注入指定子命令故障后交替执行命中与未命中命令。
   const done = f_setup();
   const removers = [];
@@ -209,7 +209,7 @@ test('Git 故障按子命令匹配并只在命中时消费', async () => {
 });
 
 /** 场景：Git 子命令持续故障可解除，未筛选故障仍按注入顺序生效。 */
-test('Git 子命令持续故障解除与全局规则兼容', async () => {
+test('Git 子命令持续故障解除与全局规则兼容', async function test_Git_子命令持续故障解除与全局规则兼容() {
   // 输入：注入持续故障后执行命令、解除注入再执行。
   const done = f_setup();
   const removers = [];
@@ -234,7 +234,7 @@ test('Git 子命令持续故障解除与全局规则兼容', async () => {
 });
 
 /** 场景：显式安装——通过子进程入口执行 Git，裸名、系统路径与内存卷路径均命中同一仓库。 */
-test('显式安装：spawnSync 通过裸名与绝对路径执行 Git', () => {
+test('显式安装：spawnSync 通过裸名与绝对路径执行 Git', function test_显式安装_spawnSync_通过裸名与绝对路径执行_Git() {
   // 输入：建立内存会话，通过 git 裸名初始化仓库
   const done = f_setup();
   try {
@@ -261,7 +261,7 @@ test('显式安装：spawnSync 通过裸名与绝对路径执行 Git', () => {
 });
 
 /** 场景：默认回落内置——未装 onRun 钩子时走内置 mini-git：未 init 的目录非仓库，rev-parse 按 128 fatal 口径收场。 */
-test('默认回落内置：未 init 的目录 → status 128 + fatal: not a git repository', () => {
+test('默认回落内置：未 init 的目录 → status 128 + fatal: not a git repository', function test_默认回落内置_未_init_的目录_status_128_fatal_not_a_git_repository() {
   const done = f_setup();
   try {
     // 输入：卷内未 init 的项目根执行 rev-parse（不装钩子）
@@ -280,7 +280,7 @@ test('默认回落内置：未 init 的目录 → status 128 + fatal: not a git 
 });
 
 /** 场景：调用入账——argv 与 options 如实记录，含调用方自行拼入的只读锁前缀。 */
-test('调用入账：argv/options 原样记录（含 --no-optional-locks 前缀）', () => {
+test('调用入账：argv/options 原样记录（含 --no-optional-locks 前缀）', function test_调用入账_argv_options_原样记录_含_no_optional_locks_前缀() {
   const done = f_setup();
   try {
     // 输入：带只读锁前缀、cwd 与 encoding 选项，通过 spawnSync 执行 Git
@@ -300,7 +300,7 @@ test('调用入账：argv/options 原样记录（含 --no-optional-locks 前缀�
 });
 
 /** 场景：onRun 全量覆盖——钩子返回完整回包对象时逐字段生效（装了钩子命中即不走内置）。 */
-test('onRun 全量覆盖：status/stdout/stderr 逐字段生效', () => {
+test('onRun 全量覆盖：status/stdout/stderr 逐字段生效', function test_onRun_全量覆盖_status_stdout_stderr_逐字段生效() {
   const done = f_setup();
   try {
     // 输入：安装返回完整回包的钩子后 spawnSync git
@@ -318,7 +318,7 @@ test('onRun 全量覆盖：status/stdout/stderr 逐字段生效', () => {
 });
 
 /** 场景：onRun 部分覆盖——钩子只返回部分字段时，其余字段保持默认值（浅合并口径）。 */
-test('onRun 部分覆盖：仅返回 stdout，status/stderr 保持默认', () => {
+test('onRun 部分覆盖：仅返回 stdout，status/stderr 保持默认', function test_onRun_部分覆盖_仅返回_stdout_status_stderr_保持默认() {
   const done = f_setup();
   try {
     // 输入：安装只返回 stdout 的钩子后 spawnSync git
@@ -337,7 +337,7 @@ test('onRun 部分覆盖：仅返回 stdout，status/stderr 保持默认', () =>
 
 /** 场景：onRun 未命中回落内置——钩子按 argv 分支未命中返回 undefined 时回落内置 mini-git（世界脚本
  * 常见形态：undefined 即获得真实语义），命中分支仍回钩子注入值。 */
-test('onRun 未命中：返回 undefined 回落内置实现，命中分支回钩子注入', () => {
+test('onRun 未命中：返回 undefined 回落内置实现，命中分支回钩子注入', function test_onRun_未命中_返回_undefined_回落内置实现_命中分支回钩子注入() {
   const done = f_setup();
   try {
     // 输入：卷内 init 一个仓库，安装按子命令分支的钩子（log 命中、其余 undefined）
@@ -361,7 +361,7 @@ test('onRun 未命中：返回 undefined 回落内置实现，命中分支回钩
 });
 
 /** 场景：钩子与账本同源——spawnSync 触发钩子，其参数与子进程调用账本保持一致。 */
-test('钩子与账本同源：onRun 的 call.argv/call.options 与 calls() 记录一致', () => {
+test('钩子与账本同源：onRun 的 call.argv/call.options 与 calls() 记录一致', function test_钩子与账本同源_onRun_的_call_argv_call_options_与_calls_记录一致() {
   const done = f_setup();
   try {
     // 输入：安装捕获 call 的钩子后 spawnSync git
@@ -379,7 +379,7 @@ test('钩子与账本同源：onRun 的 call.argv/call.options 与 calls() 记�
 });
 
 /** 场景：异步执行——spawn Git 实际执行命令，通过 stdout 与 close 返回结果。 */
-test('异步执行：spawn Git 输出结果并正常退出', async () => {
+test('异步执行：spawn Git 输出结果并正常退出', async function test_异步执行_spawn_Git_输出结果并正常退出() {
   const done = f_setup();
   try {
     // 输入：建仓后通过 spawn 执行 git branch --show-current
@@ -401,7 +401,7 @@ test('异步执行：spawn Git 输出结果并正常退出', async () => {
 
 /** 场景：内置 mini-git 端到端——init → 写文件 → status(??) → add → status(A ) → commit → log 恰一条 →
  * 改文件 → status(' M') → 二次 commit → rev-list --count=2 → branch --show-current，全链真实语义。 */
-test('内置 mini-git 端到端：init→status→add→commit→log→再改→再提交→count=2', () => {
+test('内置 mini-git 端到端：init→status→add→commit→log→再改→再提交→count=2', function test_内置_mini_git_端到端_init_status_add_commit_log_再改_再提交_count_2() {
   const done = f_setup();
   try {
     // 输入：卷内全新项目根，按生产 git-flow 的命令形态走一轮提交链
@@ -459,7 +459,7 @@ test('内置 mini-git 端到端：init→status→add→commit→log→再改→
 });
 
 /** 场景：暂存区状态码——'A '→'AM'→提交后' M'→删除' D'→暂存删除'D '，pathspec 限定照做。 */
-test('暂存区状态码：A/AM/ M/ D/D 与 pathspec 限定', () => {
+test('暂存区状态码：A/AM/ M/ D/D 与 pathspec 限定', function test_暂存区状态码_A_AM_M_D_D_与_pathspec_限定() {
   const done = f_setup();
   try {
     // 输入：卷内仓库单文件走完 暂存→再改→提交→修改→删除→暂存删除 状态迁移
@@ -508,7 +508,7 @@ test('暂存区状态码：A/AM/ M/ D/D 与 pathspec 限定', () => {
 });
 
 /** 场景：无变更提交——index 与 HEAD 一致时 commit 按 status 1 + nothing to commit 口径收场。 */
-test('无变更提交：status 1 + nothing to commit', () => {
+test('无变更提交：status 1 + nothing to commit', function test_无变更提交_status_1_nothing_to_commit() {
   const done = f_setup();
   try {
     // 输入：提交一次后立刻再次 commit（全 index 口径与路径限定口径各一次）
@@ -537,7 +537,7 @@ test('无变更提交：status 1 + nothing to commit', () => {
 });
 
 /** 场景：log 组合——branchLog 六字段格式、-n/--skip 分页、裸提交号起点、a..b 范围、%B%x00 全量消息、--not 排除。 */
-test('log 组合：六字段格式/-n/--skip/提交号起点/a..b 范围/%B%x00', () => {
+test('log 组合：六字段格式/-n/--skip/提交号起点/a..b 范围/%B%x00', function test_log_组合_六字段格式_n_skip_提交号起点_a_b_范围_B_x00() {
   const done = f_setup();
   try {
     // 输入：两次提交 + 在首个提交上建 feature 分支，覆盖生产面全部 log 形态
@@ -604,7 +604,7 @@ test('log 组合：六字段格式/-n/--skip/提交号起点/a..b 范围/%B%x00'
 
 /** 场景：rev-parse 组合——is-inside-work-tree、子目录上溯 show-toplevel、HEAD/refs/heads 取号、
  * --verify --quiet 静默失败、--verify 无 --quiet 的 128、上游探测失败。 */
-test('rev-parse 组合：inside-work-tree/show-toplevel/HEAD/verify/上游', () => {
+test('rev-parse 组合：inside-work-tree/show-toplevel/HEAD/verify/上游', function test_rev_parse_组合_inside_work_tree_show_toplevel_HEAD_verify_上游() {
   const done = f_setup();
   try {
     // 输入：卷内仓库提交一次，从根与子目录分别执行 rev-parse 各形态
@@ -651,7 +651,7 @@ test('rev-parse 组合：inside-work-tree/show-toplevel/HEAD/verify/上游', () 
 });
 
 /** 场景：rev-list 组合——--count 按分支、--max-parents=0 根提交、--topo-order --reverse 父先于子。 */
-test('rev-list 组合：count/max-parents=0/topo-order --reverse', () => {
+test('rev-list 组合：count/max-parents=0/topo-order --reverse', function test_rev_list_组合_count_max_parents_0_topo_order_reverse() {
   const done = f_setup();
   try {
     // 输入：两次提交并在首个提交上建 feature 分支
@@ -690,7 +690,7 @@ test('rev-list 组合：count/max-parents=0/topo-order --reverse', () => {
 
 /** 场景：branch/switch/checkout——分支清单、-r 恒空、switch -c 创建切换、切换同时更新 HEAD、暂存区与工作树、
  * checkout 提交号 detached、symbolic-ref 当前分支名。 */
-test('branch/switch/checkout：清单/创建/切换更新工作树/detached', () => {
+test('branch/switch/checkout：清单/创建/切换更新工作树/detached', function test_branch_switch_checkout_清单_创建_切换更新工作树_detached() {
   const done = f_setup();
   try {
     // 输入：main 根提交后 switch -c dev 再提交，覆盖分支面全部生产形态
@@ -762,7 +762,7 @@ test('branch/switch/checkout：清单/创建/切换更新工作树/detached', ()
 });
 
 /** 场景：空仓库分支口径——init 后未提交即 switch -c（未出生分支改名等价路径，ensureDevWorkflow 前置）。 */
-test('空仓库分支：init 幂等 + 未出生分支 switch -c + 首提交落新分支', () => {
+test('空仓库分支：init 幂等 + 未出生分支 switch -c + 首提交落新分支', function test_空仓库分支_init_幂等_未出生分支_switch_c_首提交落新分支() {
   const done = f_setup();
   try {
     // 输入：init -b main 后重复 init，未提交即 switch -c dev，再落首个提交
@@ -805,7 +805,7 @@ test('空仓库分支：init 幂等 + 未出生分支 switch -c + 首提交落�
 });
 
 /** 场景：merge-base --is-ancestor——沿 parents 可达性判定（0 可达 / 1 不可达 / 非法引用 128）。 */
-test('merge-base --is-ancestor：可达性判定', () => {
+test('merge-base --is-ancestor：可达性判定', function test_merge_base_is_ancestor_可达性判定() {
   const done = f_setup();
   try {
     // 输入：两次提交，根提交与 HEAD 互相做祖先判定
@@ -839,7 +839,7 @@ test('merge-base --is-ancestor：可达性判定', () => {
 });
 
 /** 场景：ls-files——全量清单、路径限定、--error-unmatch 命中（0）与未命中（1）。 */
-test('ls-files：清单/路径限定/--error-unmatch', () => {
+test('ls-files：清单/路径限定/--error-unmatch', function test_ls_files_清单_路径限定_error_unmatch() {
   const done = f_setup();
   try {
     // 输入：两个文件入库后各 ls-files 形态
@@ -873,7 +873,7 @@ test('ls-files：清单/路径限定/--error-unmatch', () => {
 });
 
 /** 场景：show——-s --format=%B 取提交全消息、rev:path 取树内文件内容、缺失路径 128。 */
-test('show：%B 消息/rev:path 内容/缺失路径', () => {
+test('show：%B 消息/rev:path 内容/缺失路径', function test_show_B_消息_rev_path_内容_缺失路径() {
   const done = f_setup();
   try {
     // 输入：一次提交后按 rev 与 rev:path 两口径读取
@@ -904,7 +904,7 @@ test('show：%B 消息/rev:path 内容/缺失路径', () => {
 });
 
 /** 场景：diff 家族——HEAD -- path 有差异/无差异、--cached --quiet 退出码、diff-tree 变更路径、ls-tree 全量。 */
-test('diff 家族：HEAD 差异/--cached 退出码/diff-tree/ls-tree', () => {
+test('diff 家族：HEAD 差异/--cached 退出码/diff-tree/ls-tree', function test_diff_家族_HEAD_差异_cached_退出码_diff_tree_ls_tree() {
   const done = f_setup();
   try {
     // 输入：提交基线后修改、暂存、再提交，覆盖 diff 读取面
@@ -960,7 +960,7 @@ test('diff 家族：HEAD 差异/--cached 退出码/diff-tree/ls-tree', () => {
 });
 
 /** 场景：忽略模型——根 .gitignore 的路径/目录模式使 status 不出被忽略路径，check-ignore 按退出码判定。 */
-test('忽略模型：.gitignore 路径与目录模式/check-ignore', () => {
+test('忽略模型：.gitignore 路径与目录模式/check-ignore', function test_忽略模型_gitignore_路径与目录模式_check_ignore() {
   const done = f_setup();
   try {
     // 输入：根 .gitignore 写入文件与目录两条模式，工作树放对应文件
@@ -988,7 +988,7 @@ test('忽略模型：.gitignore 路径与目录模式/check-ignore', () => {
 });
 
 /** 场景：写命令按真实 Git 处理仓库状态，失败不伪装成功，成功具有实际文件与引用效果。 */
-test('写命令：push/worktree/cherry-pick 失败、merge/reset/revert/stash 输出及标签引用', () => {
+test('写命令：push/worktree/cherry-pick 失败、merge/reset/revert/stash 输出及标签引用', function test_写命令_push_worktree_cherry_pick_失败_merge_reset_revert_stash_输出及标签引用() {
   const done = f_setup();
   try {
     // 输入：创建一个有根提交且未配置远端的仓库
@@ -1053,7 +1053,7 @@ test('写命令：push/worktree/cherry-pick 失败、merge/reset/revert/stash �
 
 /** 场景：未知子命令与全局选项——未知命令 status 1；--no-optional-locks 只读锁前缀被剥除；
  * -C <dir> 全局重定向生效。 */
-test('未知子命令/--no-optional-locks 前缀/-C 重定向', () => {
+test('未知子命令/--no-optional-locks 前缀/-C 重定向', function test_未知子命令_no_optional_locks_前缀_C_重定向() {
   const done = f_setup();
   try {
     // 输入：仓库内分别执行未知命令、带锁前缀 status、-C 重定向 branch
@@ -1085,7 +1085,7 @@ test('未知子命令/--no-optional-locks 前缀/-C 重定向', () => {
 
 /** 场景：存储模型落盘形态——HEAD 文本、refs/heads/<分支> 提交号、objects 40 位对象文件（类型行 +
  * 载荷）、index.json 暂存映射，与模块头注释声明的目录布局一致。 */
-test('存储模型：.git 目录布局与对象文件形态', () => {
+test('存储模型：.git 目录布局与对象文件形态', function test_存储模型_git_目录布局与对象文件形态() {
   const done = f_setup();
   try {
     // 输入：一次提交后经 lite-fs 直读 .git 目录各文件
@@ -1125,7 +1125,7 @@ test('存储模型：.git 目录布局与对象文件形态', () => {
 });
 
 /** 场景：读取待暂存文件失败时，同步和异步 Git 都报告失败且不提交部分暂存结果。 */
-test('Git 文件故障：add 遇到 EACCES/EIO 失败，索引保留，撤销后恢复', async () => {
+test('Git 文件故障：add 遇到 EACCES/EIO 失败，索引保留，撤销后恢复', async function test_Git_文件故障_add_遇到_EACCES_EIO_失败_索引保留_撤销后恢复() {
   const done = f_setup();
   let remove;
   try {
@@ -1165,7 +1165,7 @@ test('Git 文件故障：add 遇到 EACCES/EIO 失败，索引保留，撤销后
 });
 
 /** 场景：文件删除仍作为工作树差异处理，不能误报文件读取故障。 */
-test('工作树删除：diff 展示删除，add 正常暂存删除', () => {
+test('工作树删除：diff 展示删除，add 正常暂存删除', function test_工作树删除_diff_展示删除_add_正常暂存删除() {
   const done = f_setup();
   try {
     const root = '/mock/git-deleted-read';
@@ -1187,7 +1187,7 @@ test('工作树删除：diff 展示删除，add 正常暂存删除', () => {
 });
 
 /** 场景：磁盘写满通过公共故障接口注入，Git 返回失败而非抛出未处理异常。 */
-test('Git 写入失败：ENOSPC 通过命令结果报告，撤销后可恢复', () => {
+test('Git 写入失败：ENOSPC 通过命令结果报告，撤销后可恢复', function test_Git_写入失败_ENOSPC_通过命令结果报告_撤销后可恢复() {
   const done = f_setup();
   let remove;
   try {
@@ -1207,7 +1207,7 @@ test('Git 写入失败：ENOSPC 通过命令结果报告，撤销后可恢复', 
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-cmd-git.mjs 导入的
  * 安装入口与库内部相对导入必须是同一实例（exports 变动先红）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('../../lite-cmd-git.mjs');
   assert.equal(selfRef.t_install, t_install, '同一模块经不同 specifier 应共享同一实例');
@@ -1216,7 +1216,7 @@ test('包自引用 specifier 与相对导入共享同一单例', async () => {
 /** 场景：通过 lite-fs 在排除目录准备工作树，验证 Git 命令与真实文件系统的透传接线。
  * 仓库根整体排除，目录枚举和文件读写均透传；仅验证该接线下的暂存、提交和内容更新，
  * 不声称覆盖「内存父目录枚举看不到真实子树」的直读分支。普通提交语义由内存卷用例验证。 */
-test('透传集成：通过 lite-fs 在排除目录暂存和限定提交', () => {
+test('透传集成：通过 lite-fs 在排除目录暂存和限定提交', function test_透传集成_通过_lite_fs_在排除目录暂存和限定提交() {
   liteFs.t_unmock();
   liteChildProcess.t_unmock();
   // 输入：未 mock 时通过 lite-fs 创建临时目录，再将整个仓库声明为真实透传域。
@@ -1261,7 +1261,7 @@ test('透传集成：通过 lite-fs 在排除目录暂存和限定提交', () =>
 
 /** 场景：diff --no-index 内存世界的独立形态——空侧计数折叠、quiet 退出码、目录形态报错、
  * 单例入口一致性（黑盒格式断言，不依赖真实 git）。 */
-test('diff --no-index：内存形态、quiet 与目录报错', () => {
+test('diff --no-index：内存形态、quiet 与目录报错', function test_diff_no_index_内存形态_quiet_与目录报错() {
   // 输入：内存卷内对两文件/目录执行 diff --no-index 各形态。
   const cleanup = f_setup();
   try {

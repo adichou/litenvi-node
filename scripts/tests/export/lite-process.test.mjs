@@ -37,7 +37,7 @@ function f_setup(worldOptions = {}) {
 }
 
 /** 场景：mock 字段——cwd/argv/env/pid 构造时给定，各自生效；env 为可写对象支持运行中改。 */
-test('mock 字段：cwd/argv/env/pid 构造时给定并生效、env 运行中可改', () => {
+test('mock 字段：cwd/argv/env/pid 构造时给定并生效、env 运行中可改', function test_mock_字段_cwd_argv_env_pid_构造时给定并生效_env_运行中可改() {
   const done = f_setup({ argv: ['node', 'entry.mjs', '--flag'], env: { APP_PROBE: 'lit' }, pid: 4321 });
   try {
     // 输入：读假世界各字段
@@ -60,7 +60,7 @@ test('mock 字段：cwd/argv/env/pid 构造时给定并生效、env 运行中可
 });
 
 /** 场景：缺省字段——未给 argv/env/pid 时的合理缺省（argv 拷贝原生、env 与真实单轨同源、pid 同宿主）。 */
-test('mock 缺省字段：argv 拷贝原生、env 与真实单轨、pid 同宿主、platform/version 只读同源', () => {
+test('mock 缺省字段：argv 拷贝原生、env 与真实单轨、pid 同宿主、platform/version 只读同源', function test_mock_缺省字段_argv_拷贝原生_env_与真实单轨_pid_同宿主_platform_version_只读同源() {
   const done = f_setup();
   try {
     // 输入：仅给 cwd 进入假世界，读缺省字段
@@ -79,7 +79,7 @@ test('mock 缺省字段：argv 拷贝原生、env 与真实单轨、pid 同宿�
 });
 
 /** 场景：mock 幂等与非法入参——重复 mock 返回既有世界；cwd 缺席或相对路径拒绝。 */
-test('mock 幂等：重复调用返回既有世界；cwd 缺席/相对路径拒绝', () => {
+test('mock 幂等：重复调用返回既有世界；cwd 缺席/相对路径拒绝', function test_mock_幂等_重复调用返回既有世界_cwd_缺席_相对路径拒绝() {
   const done = f_setup();
   try {
     // 输入：重复 mock（幂等口径）
@@ -99,7 +99,7 @@ test('mock 幂等：重复调用返回既有世界；cwd 缺席/相对路径拒�
 
 /** 场景：execPath 视图——假世界经 mgr 通用寻址取 node 命令条目的 execPath；未安装 node
  * 命令集时抛错（世界装配不完整，fail-loud 不回落宿主路径）；真实世界透传。 */
-test('execPath：未安装抛错、安装后为 node 命令 execPath、真实世界透传', () => {
+test('execPath：未安装抛错、安装后为 node 命令 execPath、真实世界透传', function test_execPath_未安装抛错_安装后为_node_命令_execPath_真实世界透传() {
   const done = f_setup();
   try {
     // 输入 1：假世界且本进程尚未安装 node 命令集（安装动作在本用例内，此前无安装）
@@ -120,7 +120,7 @@ test('execPath：未安装抛错、安装后为 node 命令 execPath、真实世
 });
 
 /** 场景：unmock 恢复原生——cwd/argv/pid/env/execPath 全部回到真实 process 对应值。 */
-test('unmock 恢复原生：各字段回真实透传', () => {
+test('unmock 恢复原生：各字段回真实透传', function test_unmock_恢复原生_各字段回真实透传() {
   const done = f_setup({ argv: ['node', 'x'], pid: 99 });
   try {
     liteProcess.t_unmock();
@@ -141,7 +141,7 @@ test('unmock 恢复原生：各字段回真实透传', () => {
 });
 
 /** 场景：chdir 转调 cd 命令——相对路径按当前 cwd 解析、切换生效；缺失目录按 ENOENT 抛错。 */
-test('chdir→cd：相对/绝对路径切换生效、缺失目录 ENOENT、非目录 ENOTDIR', () => {
+test('chdir→cd：相对/绝对路径切换生效、缺失目录 ENOENT、非目录 ENOTDIR', function test_chdir_cd_相对_绝对路径切换生效_缺失目录_ENOENT_非目录_ENOTDIR() {
   const done = f_setup();
   try {
     // 输入：相对路径 chdir（按当前虚拟 cwd 解析）
@@ -167,7 +167,7 @@ test('chdir→cd：相对/绝对路径切换生效、缺失目录 ENOENT、非�
 });
 
 /** 场景：exit 转调 exit 命令——ProcessExitError 语义：退出码记录在案、向上抛出。 */
-test('exit→ProcessExitError：退出码入账上抛、账本按序累计', () => {
+test('exit→ProcessExitError：退出码入账上抛、账本按序累计', function test_exit_ProcessExitError_退出码入账上抛_账本按序累计() {
   const done = f_setup();
   try {
     // 输入：假世界 exit(3)
@@ -183,7 +183,7 @@ test('exit→ProcessExitError：退出码入账上抛、账本按序累计', () 
 });
 
 /** 场景：kill 转调 kill 命令——信号投递到内存子进程（signal 原语）；无此进程按 ESRCH 抛错。 */
-test('kill 透传：信号送达内存子进程、缺省 SIGTERM、无此进程 ESRCH', async () => {
+test('kill 透传：信号送达内存子进程、缺省 SIGTERM、无此进程 ESRCH', async function test_kill_透传_信号送达内存子进程_缺省_SIGTERM_无此进程_ESRCH() {
   const done = f_setup();
   try {
     // 输入：spawn 替身子进程后经 liteProcess.kill 发 SIGINT
@@ -210,7 +210,7 @@ test('kill 透传：信号送达内存子进程、缺省 SIGTERM、无此进程 
 });
 
 /** 场景：命令上下文安装 argv——门面视图与原生 process.argv 同步替换、unmock 恢复原值。 */
-test('命令上下文：argv 安装同步到门面与宿主，unmock 恢复', () => {
+test('命令上下文：argv 安装同步到门面与宿主，unmock 恢复', function test_命令上下文_argv_安装同步到门面与宿主_unmock_恢复() {
   const nativeArgv = process.argv;
   const done = f_setup();
   try {
@@ -236,7 +236,7 @@ test('命令上下文：argv 安装同步到门面与宿主，unmock 恢复', ()
 });
 
 /** 场景：命令寻址口径——chdir/exit 转调走配置寻址（命令在即语义在），不依赖卷内系统卷文件。 */
-test('命令寻址口径：cd/exit 经 mgr 配置寻址（命令在即语义在，无须卷内文件）', () => {
+test('命令寻址口径：cd/exit 经 mgr 配置寻址（命令在即语义在，无须卷内文件）', function test_命令寻址口径_cd_exit_经_mgr_配置寻址_命令在即语义在_无须卷内文件() {
   const done = f_setup();
   try {
     // 输入：先整卷删除 /mock-cmd 系统卷（模拟执行寻址必失败的世界），再直接 chdir
@@ -254,7 +254,7 @@ test('命令寻址口径：cd/exit 经 mgr 配置寻址（命令在即语义在�
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-process.mjs 导入的
  * 门面与库内部相对导入必须是同一实例，否则假世界会静默分裂（exports 变动先红）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('litenvi-node/lite-process.mjs');
   assert.equal(selfRef.liteProcess, liteProcess, '同一模块经不同 specifier 应共享同一实例');

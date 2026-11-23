@@ -37,7 +37,7 @@ async function f_withTimerPage(run, setupScript = '') {
 }
 
 /** 场景：门面默认调用原生 API，保留信号类型、组合与构造错误，并且不覆盖页面全局。 */
-test('默认透传：原生超时、abort/any、instanceof 与全局引用保持一致', async () => {
+test('默认透传：原生超时、abort/any、instanceof 与全局引用保持一致', async function test_默认透传_原生超时_abort_any_instanceof_与全局引用保持一致() {
   // 输入：未接管时直接使用原生 setTimeout/AbortController 等全局引用。
   assert.equal(typeof timer.t_mock, 'function', '模块应能在 Node 中加载公共控制接口');
   await f_withTimerPage(async page => {
@@ -61,7 +61,7 @@ test('默认透传：原生超时、abort/any、instanceof 与全局引用保持
 
 /** 场景：mock 可幂等启用，缓存的门面函数也受控制；触发仅结束本批信号，unmock 清理并恢复。 */
   // 输入：未接管时直接使用原生 setTimeout/AbortController 等全局引用。
-test('gate 生命周期：幂等、缓存入口、分批触发、清理与恢复', async () => {
+test('gate 生命周期：幂等、缓存入口、分批触发、清理与恢复', async function test_gate_生命周期_幂等_缓存入口_分批触发_清理与恢复() {
   // 输入：对同一页面多次接管与恢复，穿插分批触发的延时回调。
   await f_withTimerPage(async page => {
     const pending = await page.evaluate(async () => {
@@ -99,7 +99,7 @@ test('gate 生命周期：幂等、缓存入口、分批触发、清理与恢复
 });
 
 /** 场景：真实 fetch 使用门面信号；gate 触发后走原生超时失败分支，撤销后可正常请求。 */
-test('真实请求：超时中止 fetch，撤销后正常返回', async () => {
+test('真实请求：超时中止 fetch，撤销后正常返回', async function test_真实请求_超时中止_fetch_撤销后正常返回() {
   // 输入：接管态发出带 AbortSignal 的真实 fetch，先中止后撤销接管重发。
   let release;
   await f_withTimerPage(async page => {
@@ -132,7 +132,7 @@ test('真实请求：超时中止 fetch，撤销后正常返回', async () => {
   // 输入：接管态发出带 AbortSignal 的真实 fetch，先中止后撤销接管重发。
 
 /** 场景：非法超时参数与原生错误类型一致；不存在 scale 模式；页面导航获得新的默认实例。 */
-test('入参与导航：错误类型对照、拒绝 scale、导航复位', async () => {
+test('入参与导航：错误类型对照、拒绝 scale、导航复位', async function test_入参与导航_错误类型对照_拒绝_scale_导航复位() {
   // 输入：向 gate 传入各类非法参数并触发页面导航。
   await f_withTimerPage(async page => {
     const invalid = await page.evaluate(() => {
@@ -158,7 +158,7 @@ test('入参与导航：错误类型对照、拒绝 scale、导航复位', async
 });
 
 /** 场景：旧环境没有 AbortSignal 时可安全加载门面，业务可检测能力并降级。 */
-test('能力缺失：安全加载并明确拒绝 mock', async () => {
+test('能力缺失：安全加载并明确拒绝 mock', async function test_能力缺失_安全加载并明确拒绝_mock() {
   // 输入：在缺少浏览器能力 stub 的环境请求接管。
   await f_withTimerPage(async page => {
     assert.deepEqual(await page.evaluate(() => {
@@ -172,7 +172,7 @@ test('能力缺失：安全加载并明确拒绝 mock', async () => {
 });
 
 /** 场景：Node 与页面的同名模块状态隔离，公共 gate 控制和清理在各自上下文生效。 */
-test('上下文隔离：Node 门面控制不改原生对象，也不影响浏览器默认计时', async () => {
+test('上下文隔离：Node 门面控制不改原生对象，也不影响浏览器默认计时', async function test_上下文隔离_Node_门面控制不改原生对象_也不影响浏览器默认计时() {
   // 输入：Node 侧使用 lite 计时门面的同时浏览器侧维持原生计时。
   const native = globalThis.AbortSignal;
   const nativeTimeout = native.timeout;
@@ -214,7 +214,7 @@ test('上下文隔离：Node 门面控制不改原生对象，也不影响浏览
 });
 
 /** 场景：周期门面默认透传原生，启用 gate 后接管已注册定时器，推进等待异步回调且不改全局。 */
-test('interval gate：接管已有定时器、手动推进和异步完成', async () => {
+test('interval gate：接管已有定时器、手动推进和异步完成', async function test_interval_gate_接管已有定时器_手动推进和异步完成() {
   // 输入：接管页面已有 interval 并手动推进虚拟时间。
   await f_withTimerPage(async page => {
     const initial = await page.evaluate(async () => {
@@ -253,7 +253,7 @@ test('interval gate：接管已有定时器、手动推进和异步完成', asyn
 });
 
 /** 场景：周期 gate 中新增、清除和卸载的生命周期；回调中新建的周期留到下一步。 */
-test('interval gate：分步新增、清除、卸载与原生恢复', async () => {
+test('interval gate：分步新增、清除、卸载与原生恢复', async function test_interval_gate_分步新增_清除_卸载与原生恢复() {
   // 输入：分步新增/清除 interval 后卸载接管，检查原生恢复。
   await f_withTimerPage(async page => {
     assert.deepEqual(await page.evaluate(async () => {
@@ -287,7 +287,7 @@ test('interval gate：分步新增、清除、卸载与原生恢复', async () =
 });
 
 /** 场景：周期回调异常必须反馈给测试，参数错误必须明确拒绝。 */
-test('interval gate：拒绝非法参数并传播回调错误', async () => {
+test('interval gate：拒绝非法参数并传播回调错误', async function test_interval_gate_拒绝非法参数并传播回调错误() {
   // 输入：向 interval gate 传入非法参数，回调内抛错。
   for (const options of [{ signals: true }, { signals: false }, { intervals: true }, { intervals: false }]) {
     assert.throws(() => timer.t_mock(options), TypeError, '旧的选择性 Mock 选项必须明确拒绝');
@@ -322,7 +322,7 @@ test('interval gate：拒绝非法参数并传播回调错误', async () => {
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-browser-timer.mjs 导入的
  * 门面与库内部相对导入必须是同一实例，否则页面时钟 gate 会静默分裂（exports 变动先红）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('litenvi-node/lite-browser-timer.mjs');
   assert.equal(selfRef.default, timer, '同一模块经不同 specifier 应共享同一实例');

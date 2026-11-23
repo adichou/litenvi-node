@@ -7,7 +7,7 @@ import liteTimer, { setTimeout, clearTimeout, setInterval, clearInterval, Date }
 const NativeDate = globalThis.Date;
 
 /** 场景：未 mock 时五个绑定原样转发——真实计时、原生 Date 面，advanceMs 明确拒绝。 */
-test('默认透传：真实定时器、原生 Date、advanceMs 拒绝', async () => {
+test('默认透传：真实定时器、原生 Date、advanceMs 拒绝', async function test_默认透传_真实定时器_原生_Date_advanceMs_拒绝() {
   // 输入：未 mock 时注册真实定时器并调用 advanceMs。
   liteTimer.t_unmock();
   const before = NativeDate.now();
@@ -23,7 +23,7 @@ test('默认透传：真实定时器、原生 Date、advanceMs 拒绝', async ()
 
 /** 场景：mock 后世界冻结在纪元——Date 三形态取虚拟时刻，定时器只随 advanceMs 到期，先后按到期序。 */
   // 输入：未 mock 时注册真实定时器并调用 advanceMs。
-test('虚拟时钟：纪元冻结、手动推进、到期序与回调内新建定时器', async () => {
+test('虚拟时钟：纪元冻结、手动推进、到期序与回调内新建定时器', async function test_虚拟时钟_纪元冻结_手动推进_到期序与回调内新建定时器() {
   // 输入：t_mock 冻结纪元后按序推进时间轴并注册多层定时器。
   liteTimer.t_unmock();
   const epoch = liteTimer.t_mock({ now: '2026-10-08T04:00:00.000Z' });
@@ -60,7 +60,7 @@ test('虚拟时钟：纪元冻结、手动推进、到期序与回调内新建�
 });
 
 /** 场景：重复 mock 幂等保留既有纪元与在途定时器；推进继续可用。 */
-test('幂等 mock：纪元不被改写、在途定时器保留', async () => {
+test('幂等 mock：纪元不被改写、在途定时器保留', async function test_幂等_mock_纪元不被改写_在途定时器保留() {
   // 输入：重复 t_mock 传不同纪元，检查在途定时器存续。
   liteTimer.t_unmock();
   liteTimer.t_mock({ now: 1_000 });
@@ -77,7 +77,7 @@ test('幂等 mock：纪元不被改写、在途定时器保留', async () => {
   // 输入：重复 t_mock 传不同纪元，检查在途定时器存续。
 
 /** 场景：setInterval 随每次推进到期、clearInterval 停止；clearTimeout 取消未到期定时器。 */
-test('周期定时器与取消：interval 逐次到期、clear 系生效', async () => {
+test('周期定时器与取消：interval 逐次到期、clear 系生效', async function test_周期定时器与取消_interval_逐次到期_clear_系生效() {
   // 输入：虚拟时钟下注册 interval 并逐拍推进、清除。
   liteTimer.t_unmock();
   liteTimer.t_mock({ now: 0 });
@@ -98,7 +98,7 @@ test('周期定时器与取消：interval 逐次到期、clear 系生效', async
 });
 
 /** 场景：unmock 丢弃未触发定时器并恢复原生——此后真实计时与真实 Date 生效。 */
-test('unmock：在途定时器丢弃、原生计时恢复', async () => {
+test('unmock：在途定时器丢弃、原生计时恢复', async function test_unmock_在途定时器丢弃_原生计时恢复() {
   // 输入：mock 态注册在途定时器后 t_unmock，再注册原生定时器。
   liteTimer.t_unmock();
   liteTimer.t_mock({ now: 0 });
@@ -118,7 +118,7 @@ test('unmock：在途定时器丢弃、原生计时恢复', async () => {
 });
 
 /** 场景：非法入参按类型拒绝——mock 形状与纪元、推进量、未 mock 推进。 */
-test('入参校验：mock 形状/纪元、advanceMs 数值与状态', async () => {
+test('入参校验：mock 形状/纪元、advanceMs 数值与状态', async function test_入参校验_mock_形状_纪元_advanceMs_数值与状态() {
   // 输入：向 t_mock/t_advanceMs 传入非法形态参数。
   liteTimer.t_unmock();
   for (const bad of [null, false, [], 'mock']) {
@@ -142,7 +142,7 @@ test('入参校验：mock 形状/纪元、advanceMs 数值与状态', async () =
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-timer.mjs 导入的
  * 遮蔽绑定与库内部相对导入必须是同一实例，否则虚拟时钟会静默分裂（exports 变动先红）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('../../lite-timer.mjs');
   assert.equal(selfRef.default, liteTimer, '同一模块经不同 specifier 应共享同一实例');

@@ -9,7 +9,7 @@ import liteServer from '../../lite-server.mjs';
 import liteBrowser from '../../lite-browser.mjs';
 
 /** 场景：共享单例页——open 幂等复用、页面经真实 socket 取回包、观测账本入账、close 清空单例。 */
-test('共享单例页：open 幂等、真实 socket 回包、账本入账、close 清空', async () => {
+test('共享单例页：open 幂等、真实 socket 回包、账本入账、close 清空', async function test_共享单例页_open_幂等_真实_socket_回包_账本入账_close_清空() {
   // 输入：mock 两门面并登记页面壳 handler（/ 回 HTML、其余 404）
   liteHttp.t_mock();
   liteServer.t_mock();
@@ -57,7 +57,7 @@ test('共享单例页：open 幂等、真实 socket 回包、账本入账、clos
 });
 
 /** 场景：共享上下文——context() 返回 open 建立的同一上下文，弹层（target=_blank）经它捕获。 */
-test('共享上下文：context() 同实例、弹层经 waitForEvent("page") 捕获并取回包', async () => {
+test('共享上下文：context() 同实例、弹层经 waitForEvent("page") 捕获并取回包', async function test_共享上下文_context_同实例_弹层经_waitForEvent_page_捕获并取回包() {
   // 输入：登记含 target=_blank 链接的页面与弹层页 handler，open 后取 context 与共享页
   liteHttp.t_mock();
   liteServer.t_mock();
@@ -109,7 +109,7 @@ test('共享上下文：context() 同实例、弹层经 waitForEvent("page") 捕
  * （显式有头用例会弹出浏览器窗口）；此处保留一条守卫：模式只由显式参数决定——环境变量不参与
  * 解析，LITENVI_HEADLESS 不得使缺省无头变为有头（有头是调用处按需开启的特定场景能力，
  * 不能成为进程级全局属性）。 */
-test('环境变量不参与模式解析：LITENVI_HEADLESS=0 不改变缺省无头', async () => {
+test('环境变量不参与模式解析：LITENVI_HEADLESS=0 不改变缺省无头', async function test_环境变量不参与模式解析_LITENVI_HEADLESS_0_不改变缺省无头() {
   // 输入：临时置 LITENVI_HEADLESS=0（try/finally 还原，不污染同进程后续用例）
   const previous = process.env.LITENVI_HEADLESS;
   process.env.LITENVI_HEADLESS = '0';
@@ -126,7 +126,7 @@ test('环境变量不参与模式解析：LITENVI_HEADLESS=0 不改变缺省无�
 });
 
 /** 场景：前置约束与 close 语义——未 open 时 page()/context() 拒绝，close 幂等静默。 */
-test('前置约束：未 open 时 page()/context() 拒绝、close 未 open 静默 no-op', async () => {
+test('前置约束：未 open 时 page()/context() 拒绝、close 未 open 静默 no-op', async function test_前置约束_未_open_时_page_context_拒绝_close_未_open_静默_no_op() {
   // 输入：未 open 状态（上一用例已 close 清空单例）下依次调用 page/context/close
   // 预期 1：page() 拒绝并提示先 open
   assert.throws(() => liteBrowser.page(), /需先 open/, '未 open 时取页应拒绝');
@@ -138,7 +138,7 @@ test('前置约束：未 open 时 page()/context() 拒绝、close 未 open 静�
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-browser.mjs 导入的
  * 单例与库内部相对导入必须是同一实例，否则浏览器实例会静默分裂（exports 变动先红）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('litenvi-node/lite-browser.mjs');
   assert.equal(selfRef.default, liteBrowser, '同一模块经不同 specifier 应共享同一实例');

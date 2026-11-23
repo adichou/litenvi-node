@@ -48,7 +48,7 @@ function f_setup() {
 }
 
 /** 场景：系统卷已安装后导入 Git 不登记，显式安装后补齐命令文件并执行真实内存 Git。 */
-test('晚安装落卷：导入 Git 无副作用，t_install 后命令可执行', async () => {
+test('晚安装落卷：导入 Git 无副作用，t_install 后命令可执行', async function test_晚安装落卷_导入_Git_无副作用_t_install_后命令可执行() {
   const done = f_setup();
   try {
     // 输入：安装系统卷后首次导入 Git 命令模块
@@ -70,7 +70,7 @@ test('晚安装落卷：导入 Git 无副作用，t_install 后命令可执行',
 });
 
 /** 场景：模块只公开用户操作入口，内部协作名称使用 i_，mock 不暴露私有实现。 */
-test('方法隔离：公共接口、内部名称与私有实现边界', async () => {
+test('方法隔离：公共接口、内部名称与私有实现边界', async function test_方法隔离_公共接口_内部名称与私有实现边界() {
   // 输入：读取各模块的公共门面与导出列表，不执行内部协作方法
   //（导出面对账需命名空间本身，动态 import 与静态导入共享同一模块实例）
   const [nodeModule, osModule, processModule] = await Promise.all([
@@ -104,7 +104,7 @@ test('方法隔离：公共接口、内部名称与私有实现边界', async ()
 });
 
 /** 场景：命令对象统一承载公开配置，执行层协作方法以 i_ 标识包内用途。 */
-test('接口约定：command 对象公开 inject/onRun，内部执行方法使用 i_', () => {
+test('接口约定：command 对象公开 inject/onRun，内部执行方法使用 i_', function test_接口约定_command_对象公开_inject_onRun_内部执行方法使用_i() {
   const done = f_setup();
   try {
     // 输入：按命令名取得配置句柄，不直接调用内部执行方法
@@ -124,7 +124,7 @@ test('接口约定：command 对象公开 inject/onRun，内部执行方法使�
 });
 
 /** 场景：命令框架将检查点注入委托给命令实现，并隔离不支持检查点的命令。 */
-test('inject 支持命令定义的检查点', () => {
+test('inject 支持命令定义的检查点', function test_inject_支持命令定义的检查点() {
   // 输入：为自定义命令注册检查点注入并执行。
   const done = f_setup();
   try {
@@ -149,7 +149,7 @@ test('inject 支持命令定义的检查点', () => {
 
 /** 场景：所有命令实现使用包内执行名称，调用方经 child_process 执行同步和异步命令。 */
   // 输入：为自定义命令注册检查点注入并执行。
-test('命令执行协议：仅保留 i_run/i_runSync，经子进程公共入口分派', async () => {
+test('命令执行协议：仅保留 i_run/i_runSync，经子进程公共入口分派', async function test_命令执行协议_仅保留_i_run_i_runSync_经子进程公共入口分派() {
   // 输入：声明仅含 i_run/i_runSync 的命令实现并经 spawn 分派。
   const done = f_setup();
   try {
@@ -181,7 +181,7 @@ test('命令执行协议：仅保留 i_run/i_runSync，经子进程公共入口�
 });
 
 /** 场景：异步执行在等待前消费 once，持续故障保留至显式移除。 */
-test('故障领取：once 在闸门等待前消费，持续故障保留至移除', async () => {
+test('故障领取：once 在闸门等待前消费，持续故障保留至移除', async function test_故障领取_once_在闸门等待前消费_持续故障保留至移除() {
   const done = f_setup();
   let release;
   try {
@@ -205,7 +205,7 @@ test('故障领取：once 在闸门等待前消费，持续故障保留至移除
 });
 
 /** 场景：用户命令登记后可按名称或路径配置，并通过公共执行入口调用。 */
-test('命令登记：defined 含完整路径，command 按名称与路径返回同一句柄', () => {
+test('命令登记：defined 含完整路径，command 按名称与路径返回同一句柄', function test_命令登记_defined_含完整路径_command_按名称与路径返回同一句柄() {
   const done = f_setup();
   try {
     // 输入：setup 通过 defineUserCommand 登记专用命令
@@ -219,7 +219,7 @@ test('命令登记：defined 含完整路径，command 按名称与路径返回�
 });
 
 /** 场景：公共执行入口自动安装系统命令，重复执行不会覆盖已有命令文件。 */
-test('自动安装：执行命令建系统卷，重复执行保留文件与用户命令', () => {
+test('自动安装：执行命令建系统卷，重复执行保留文件与用户命令', function test_自动安装_执行命令建系统卷_重复执行保留文件与用户命令() {
   const done = f_setup();
   try {
     // 输入：只调用公共子进程接口，不直接访问文件私有安装方法
@@ -242,7 +242,7 @@ test('自动安装：执行命令建系统卷，重复执行保留文件与用�
 });
 
 /** 场景：惰性安装——执行寻址首次未命中且卷内尚无 /mock-cmd 时自动 install 后重试，世界无须显式装。 */
-test('惰性安装：执行入口自动落系统卷并命中', () => {
+test('惰性安装：执行入口自动落系统卷并命中', function test_惰性安装_执行入口自动落系统卷并命中() {
   const done = f_setup();
   try {
     // 输入：新卷（未显式 install）直接执行 git
@@ -257,7 +257,7 @@ test('惰性安装：执行入口自动落系统卷并命中', () => {
 });
 
 /** 场景：执行入口按 PATH 寻址，用户命令优先于系统命令，绝对路径映射至系统卷。 */
-test('PATH 解析：用户命令优先，绝对路径映射与命名空间路径均可执行', () => {
+test('PATH 解析：用户命令优先，绝对路径映射与命名空间路径均可执行', function test_PATH_解析_用户命令优先_绝对路径映射与命名空间路径均可执行() {
   const done = f_setup();
   try {
     // 输入：先观察系统 echo，再登记同名用户命令
@@ -274,7 +274,7 @@ test('PATH 解析：用户命令优先，绝对路径映射与命名空间路径
 });
 
 /** 场景：未注册命令执行报 ENOENT——未定义命令（裸名/绝对路径）与文件被删的已定义命令都未命中。 */
-test('执行失败：未定义命令与文件缺失的已定义命令', () => {
+test('执行失败：未定义命令与文件缺失的已定义命令', function test_执行失败_未定义命令与文件缺失的已定义命令() {
   const done = f_setup();
   try {
     // 输入：执行未定义的裸名（惰性安装已触发后仍未命中）
@@ -294,7 +294,7 @@ test('执行失败：未定义命令与文件缺失的已定义命令', () => {
 });
 
 /** 场景：系统卷持久——/mock-cmd 为 lite-fs 持久根：卷复位（unmock+mock）后命令文件存活，用户数据清零。 */
-test('系统卷持久：卷复位后 /mock-cmd 仍在、用户数据被清、命令继续可执行', () => {
+test('系统卷持久：卷复位后 /mock-cmd 仍在、用户数据被清、命令继续可执行', function test_系统卷持久_卷复位后_mock_cmd_仍在_用户数据被清_命令继续可执行() {
   const done = f_setup();
   try {
     // 输入：装系统卷并写用户数据，随后卷复位（unmock + mock 重建）
@@ -317,7 +317,7 @@ test('系统卷持久：卷复位后 /mock-cmd 仍在、用户数据被清、命
 });
 
 /** 场景：持久根通用机制——markPersistent 登记任意根跨卷存活；卷内缺席的持久根恢复后仍缺席。 */
-test('markPersistent：自定义持久根跨卷存活、缺席根保持缺席', () => {
+test('markPersistent：自定义持久根跨卷存活、缺席根保持缺席', function test_markPersistent_自定义持久根跨卷存活_缺席根保持缺席() {
   // 输入：登记自定义持久根（lite-fs 不认识具体根——通用机制）
   liteFs.markPersistent('/keep');
   liteFs.markPersistent('/absent-root');
@@ -340,7 +340,7 @@ test('markPersistent：自定义持久根跨卷存活、缺席根保持缺席', 
 });
 
 /** 场景：inject exit 替换——命中后回包整体替换为失败包（status=exit、stdout 空、stderr 附带）。 */
-test('inject exit：同步面回包替换、异步面退出码替换', async () => {
+test('inject exit：同步面回包替换、异步面退出码替换', async function test_inject_exit_同步面回包替换_异步面退出码替换() {
   const done = f_setup();
   let remove = null;
   try {
@@ -372,7 +372,7 @@ test('inject exit：同步面回包替换、异步面退出码替换', async () 
 });
 
 /** 场景：inject wait 闸门——异步面命中后挂起，闸门放行再按 exit 收场；同步面无法阻塞、直接回失败包。 */
-test('inject wait：异步面闸门放行后收场、同步面直接回包', async () => {
+test('inject wait：异步面闸门放行后收场、同步面直接回包', async function test_inject_wait_异步面闸门放行后收场_同步面直接回包() {
   const done = f_setup();
   let remove = null;
   try {
@@ -403,7 +403,7 @@ test('inject wait：异步面闸门放行后收场、同步面直接回包', asy
 });
 
 /** 场景：inject once——命中即毁：首次执行回失败包，后续执行回内置实现。 */
-test('inject once：命中即毁', () => {
+test('inject once：命中即毁', function test_inject_once_命中即毁() {
   const done = f_setup();
   try {
     // 输入：注入 once 故障后连续两次 spawnSync
@@ -421,7 +421,7 @@ test('inject once：命中即毁', () => {
 });
 
 /** 场景：inject 句柄形态与命中顺序——command(path).inject 同一入口；多条故障按注入序命中、移除后让位。 */
-test('inject 句柄形态与命中顺序：command().inject、按注入序、移除让位', () => {
+test('inject 句柄形态与命中顺序：command().inject、按注入序、移除让位', function test_inject_句柄形态与命中顺序_command_inject_按注入序_移除让位() {
   const done = f_setup();
   let removeA = null;
   try {
@@ -450,7 +450,7 @@ test('inject 句柄形态与命中顺序：command().inject、按注入序、移
 
 /** 场景：非法 fault 拒绝——exit 缺席且无 wait、exit 0/负数/非整、wait 非 Promise、stderr 非串、
  * checkpoint 与故障混用、非对象。 */
-test('inject 非法 fault：各非法形态逐一拒绝', () => {
+test('inject 非法 fault：各非法形态逐一拒绝', function test_inject_非法_fault_各非法形态逐一拒绝() {
   const done = f_setup();
   try {
     // 输入：逐个非法形态注入（exit 须 ≥1 或 wait 为 Promise——不允许成功回包替换）
@@ -478,7 +478,7 @@ test('inject 非法 fault：各非法形态逐一拒绝', () => {
 });
 
 /** 场景：用户级临时命令 register——落 /mock/bin、PATH 序在系统命令之前可遮蔽、卷复位即清。 */
-test('register：用户级临时命令可执行、遮蔽系统同名、卷复位即清', async () => {
+test('register：用户级临时命令可执行、遮蔽系统同名、卷复位即清', async function test_register_用户级临时命令可执行_遮蔽系统同名_卷复位即清() {
   // 输入：建卷（setup 统一 mock lite-fs + lite-child_process）后注册用户级 hello 与遮蔽系统的 node
   const done = f_setup();
   try {
@@ -513,7 +513,7 @@ test('register：用户级临时命令可执行、遮蔽系统同名、卷复位
 });
 
 /** 场景：register 前置校验——裸名、impl 对象、须先 mock lite-fs。 */
-test('register 校验：裸名/impl/先 mock lite-fs', async () => {
+test('register 校验：裸名/impl/先 mock lite-fs', async function test_register_校验_裸名_impl_先_mock_lite_fs() {
   // 输入：带路径的名字注册
   // 预期 1：拒绝（须裸命令名）
   assert.throws(() => mgr.t_defineUserCommand('/mock/bin/x', {}), /裸命令名/, '带路径名应拒绝');
@@ -525,7 +525,7 @@ test('register 校验：裸名/impl/先 mock lite-fs', async () => {
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-cmd-mgr.mjs 导入的
  * 登记表与库内部相对导入必须是同一实例，否则命令注册会静默分裂（exports 变动先红）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('../../lite-cmd-mgr.mjs');
   assert.equal(selfRef.default, mgr, '同一模块经不同 specifier 应共享同一实例');

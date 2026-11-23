@@ -27,7 +27,7 @@ const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/'));
 t_installGit();
 
 /** 场景：异步 Node 命令可由钩子直接提供结果，无须存在可执行的测试源码。 */
-test('异步钩子：Node 测试命令替换、受控等待与退出结果', async () => {
+test('异步钩子：Node 测试命令替换、受控等待与退出结果', async function test_异步钩子_Node_测试命令替换_受控等待与退出结果() {
     liteFs.t_mock({ exclude: [EXCLUDED] });
     liteChildProcess.t_mock();
     let release;
@@ -77,7 +77,7 @@ test('异步钩子：Node 测试命令替换、受控等待与退出结果', asy
 });
 
 /** 场景：异步钩子回落内置实现、等待并包装结果时只执行一次，异常不会悬挂子进程。 */
-test('异步钩子：内置回落、惰性包装和错误结算', async () => {
+test('异步钩子：内置回落、惰性包装和错误结算', async function test_异步钩子_内置回落_惰性包装和错误结算() {
     liteFs.t_mock({ exclude: [EXCLUDED] });
     liteChildProcess.t_mock();
     try {
@@ -130,7 +130,7 @@ test('异步钩子：内置回落、惰性包装和错误结算', async () => {
 });
 
 /** 场景：故障优先于异步钩子，命令取消或世界卸载后不投递迟到结果。 */
-test('异步钩子：故障优先与生命周期隔离', async () => {
+test('异步钩子：故障优先与生命周期隔离', async function test_异步钩子_故障优先与生命周期隔离() {
     liteFs.t_mock({ exclude: [EXCLUDED] });
     liteChildProcess.t_mock();
     const releases = [];
@@ -183,7 +183,7 @@ test('异步钩子：故障优先与生命周期隔离', async () => {
 });
 
 /** 场景：钩子等待内置异步执行时，取消或卸载仍通知内置资源清理且不投递聚合输出。 */
-test('异步钩子：包装内置命令期间的资源清理', async () => {
+test('异步钩子：包装内置命令期间的资源清理', async function test_异步钩子_包装内置命令期间的资源清理() {
     liteFs.t_mock({ exclude: [EXCLUDED] });
     try {
         for (const mode of ['kill', 'unmock']) {
@@ -224,7 +224,7 @@ test('异步钩子：包装内置命令期间的资源清理', async () => {
 });
 
 /** 场景：同步调用明确拒绝异步钩子，不能把 Promise 当作空成功结果。 */
-test('同步钩子：拒绝 Promise 结果', () => {
+test('同步钩子：拒绝 Promise 结果', function test_同步钩子_拒绝_Promise_结果() {
     liteFs.t_mock({ exclude: [EXCLUDED] });
     liteChildProcess.t_mock();
     try {
@@ -240,7 +240,7 @@ test('同步钩子：拒绝 Promise 结果', () => {
 });
 
 /** 场景：所有命令形态的异步执行都先等待故障闸门，放行或拒绝后按配置退出。 */
-test('异步故障统一调度：Git/npm/node/OS 与用户命令等待同一 wait 规则', async () => {
+test('异步故障统一调度：Git/npm/node/OS 与用户命令等待同一 wait 规则', async function test_异步故障统一调度_Git_npm_node_OS_与用户命令等待同一_wait_规则() {
   // 输入：真实异步、仅同步及双实现命令，分别注入放行、拒绝和仅 wait 三种故障配置
   const commands = [
     ['git', ['status']], ['npm', ['-v']], ['node', ['-v']], ['echo', ['builtin']],
@@ -293,7 +293,7 @@ test('异步故障统一调度：Git/npm/node/OS 与用户命令等待同一 wai
 });
 
 /** 场景：同步命令转异步时 once 只消费一次，等待期间终止后不再投递迟到回包。 */
-test('同步回落：once 消费、钩子保留、kill 与卸载后丢弃迟到故障', async () => {
+test('同步回落：once 消费、钩子保留、kill 与卸载后丢弃迟到故障', async function test_同步回落_once_消费_钩子保留_kill_与卸载后丢弃迟到故障() {
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteChildProcess.t_mock();
   let release;
@@ -357,7 +357,7 @@ test('同步回落：once 消费、钩子保留、kill 与卸载后丢弃迟到�
 });
 
 /** 场景：自然退出会清理 PID，重复 kill 不再发送退出事件。 */
-test('spawn 生命周期：spawn/data/exit/close、退出字段与重复 kill', async () => {
+test('spawn 生命周期：spawn/data/exit/close、退出字段与重复 kill', async function test_spawn_生命周期_spawn_data_exit_close_退出字段与重复_kill() {
   // 输入：内存 spawn 执行 echo，记录全部生命周期事件
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/app', { recursive: true });
@@ -392,7 +392,7 @@ test('spawn 生命周期：spawn/data/exit/close、退出字段与重复 kill', 
 });
 
 /** 场景：忽略流及退出后的迟到命令回调，不重复关闭也不产生流写入错误。 */
-test('spawn stdio ignore 与迟到回调：不暴露管道、不重复退出', async () => {
+test('spawn stdio ignore 与迟到回调：不暴露管道、不重复退出', async function test_spawn_stdio_ignore_与迟到回调_不暴露管道_不重复退出() {
   // 输入：命令不暴露 stdin/stdout/stderr，内部仍可输出并正常退出
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteChildProcess.t_mock();
@@ -433,7 +433,7 @@ test('spawn stdio ignore 与迟到回调：不暴露管道、不重复退出', a
 });
 
 /** 场景：内存实现记录调用——mock 后 spawn 不起真实进程，调用入账。 */
-test('内存实现：调用入账、替身子进程带 pid/unref、不起真实进程', async () => {
+test('内存实现：调用入账、替身子进程带 pid/unref、不起真实进程', async function test_内存实现_调用入账_替身子进程带_pid_unref_不起真实进程() {
   // 输入：mock 后以守护进程形状参数 spawn
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/app', { recursive: true });
@@ -466,7 +466,7 @@ test('内存实现：调用入账、替身子进程带 pid/unref、不起真实�
   }
 });
 /** 场景：用户级临时命令——defineUserCommand 注册定制命令（特殊场景的 data 消息响应），异步面按事件序到达。 */
-test('defineUserCommand：定制命令 data 消息响应按事件序到达', async () => {
+test('defineUserCommand：定制命令 data 消息响应按事件序到达', async function test_defineUserCommand_定制命令_data_消息响应按事件序到达() {
   // 输入：defineUserCommand 注册定制命令（stdout data 消息 + 退出），异步 spawn 消费事件流
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/app', { recursive: true });
@@ -499,7 +499,7 @@ test('defineUserCommand：定制命令 data 消息响应按事件序到达', asy
 });
 
 /** 场景：kill 命令——spawn('kill', [pid]) 经命令分派向内存子进程发信号（默认 SIGTERM）。 */
-test('kill 命令：spawn kill 按 pid 发 SIGTERM、退出码 null、再杀无此进程', async () => {
+test('kill 命令：spawn kill 按 pid 发 SIGTERM、退出码 null、再杀无此进程', async function test_kill_命令_spawn_kill_按_pid_发_SIGTERM_退出码_null_再杀无此进程() {
   // 输入：mock 内存卷与 spawn 边界后 spawn 替身子进程，再以 spawn('kill', [pid]) 执行 kill 命令
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/app', { recursive: true });
@@ -528,7 +528,7 @@ test('kill 命令：spawn kill 按 pid 发 SIGTERM、退出码 null、再杀无�
 });
 
 /** 场景：spawnSync 命令集分派——echo 内置回包经钩子包裹、node -v 同源回包、未注册命令失败。 */
-test('spawnSync 分派：echo 回包经 onRun 前后加标记、node -v 探测、未注册命令 ENOENT', async () => {
+test('spawnSync 分派：echo 回包经 onRun 前后加标记、node -v 探测、未注册命令 ENOENT', async function test_spawnSync_分派_echo_回包经_onRun_前后加标记_node_v_探测_未注册命令_ENOENT() {
   // 输入：mock 内存卷与 spawn 边界后对 echo 安装 onRun 钩子、请求 node -v、请求未注册命令
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/app', { recursive: true });
@@ -568,7 +568,7 @@ test('spawnSync 分派：echo 回包经 onRun 前后加标记、node -v 探测�
 });
 
 /** 场景：命令集桥接 lite-fs——ls 命令读当前作用域目录，回命令行形态 stdout。 */
-test('ls 桥接 lite-fs：内存卷目录回命令行形态名单、缺失目录按 ls 失败', async () => {
+test('ls 桥接 lite-fs：内存卷目录回命令行形态名单、缺失目录按 ls 失败', async function test_ls_桥接_lite_fs_内存卷目录回命令行形态名单_缺失目录按_ls_失败() {
   // 输入：mock lite-child_process 与 lite-fs 建卷写入两个文件后 spawnSync('ls')
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/app', { recursive: true });
@@ -596,7 +596,7 @@ test('ls 桥接 lite-fs：内存卷目录回命令行形态名单、缺失目录
 });
 
 /** 场景：前置约束——未 mock 时 calls() 拒绝，内部信号原语不作为公共入口。 */
-test('前置约束：未 mock 即 calls() 拒绝，信号原语不作为公共入口', async () => {
+test('前置约束：未 mock 即 calls() 拒绝，信号原语不作为公共入口', async function test_前置约束_未_mock_即_calls_拒绝_信号原语不作为公共入口() {
   // 输入：未 mock 状态下查询调用账本
   // 预期 1：拒绝并提示先 mock
   assert.throws(() => liteChildProcess.t_calls(), /先 t_mock/, '未设置内存实现时查询调用应拒绝');
@@ -606,7 +606,7 @@ test('前置约束：未 mock 即 calls() 拒绝，信号原语不作为公共�
 });
 
 /** 场景：mock 幂等与 unmock 丢弃——重复 mock 复用既有账本，unmock 后丢弃。 */
-test('mock 幂等：重复 mock 保留账本，unmock 后丢弃回真实语义', async () => {
+test('mock 幂等：重复 mock 保留账本，unmock 后丢弃回真实语义', async function test_mock_幂等_重复_mock_保留账本_unmock_后丢弃回真实语义() {
   // 输入：mock（含 lite-fs 卷，node 可解析）后 spawn 一次，重复 mock（幂等），再 spawn 一次
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/app', { recursive: true });
@@ -627,7 +627,7 @@ test('mock 幂等：重复 mock 保留账本，unmock 后丢弃回真实语义',
 });
 
 /** 场景：所有命令共用调用账本，清账保留命令配置和在运行的子进程。 */
-test('reset：统一清空 git/node/os/用户命令与失败调用，保留钩子、故障和子进程', async () => {
+test('reset：统一清空 git/node/os/用户命令与失败调用，保留钩子、故障和子进程', async function test_reset_统一清空_git_node_os_用户命令与失败调用_保留钩子_故障和子进程() {
   // 输入：未 mock 状态下清空调用账本
   // 预期 1：拒绝清账并提示先 mock
   assert.throws(() => liteChildProcess.t_reset(), /先 t_mock/, '未 mock 时清账应拒绝');
@@ -706,8 +706,8 @@ test('reset：统一清空 git/node/os/用户命令与失败调用，保留钩�
   }
 });
 
-/** 场景：调用账本快照隔离，输入和返回快照中的参数修改不污染记录。 */
-test('calls：参数与选项快照隔离，缺少同步实现的命令也入账', () => {
+/** 场景：输入修改不污染记录，每次读取返回独立的账本、记录、参数和选项副本。 */
+test('calls：参数与选项快照隔离，缺少同步实现的命令也入账', function test_calls_参数与选项快照隔离_缺少同步实现的命令也入账() {
   // 输入：建立内存会话，注册没有同步实现的用户命令并携带参数和选项执行
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/app', { recursive: true });
@@ -718,16 +718,18 @@ test('calls：参数与选项快照隔离，缺少同步实现的命令也入账
     const args = ['original'];
     const options = { cwd: '/original' };
     const result = liteChildProcess.spawnSync('ledger-empty', args, options);
-    // 输入：修改原始参数、原始选项及返回快照的参数、选项和数组
+    // 输入：修改原始参数和选项，再连续读取两份观察快照
     args[0] = 'input-mutated';
     options.cwd = '/input-mutated';
     const snapshot = liteChildProcess.t_calls();
-    snapshot[0].args[0] = 'snapshot-mutated';
-    snapshot[0].options.cwd = '/snapshot-mutated';
-    snapshot.pop();
+    const nextSnapshot = liteChildProcess.t_calls();
+    assert.notStrictEqual(snapshot, nextSnapshot, '每次读取应返回独立的账本数组');
+    assert.notStrictEqual(snapshot[0], nextSnapshot[0], '每次读取应返回独立的调用记录');
+    assert.notStrictEqual(snapshot[0].args, nextSnapshot[0].args, '参数数组应与其他快照隔离');
+    assert.notStrictEqual(snapshot[0].options, nextSnapshot[0].options, '选项对象应与其他快照隔离');
     // 预期 1：缺少同步实现的命令返回 ENOENT
     assert.equal(result.error.code, 'ENOENT', '缺少同步实现应返回失败');
-    // 预期 2：失败调用仍入账，外部修改不影响已记录的原始参数与选项
+    // 预期 2：失败调用仍入账，原始输入修改不影响已记录的参数与选项
     assert.deepEqual(liteChildProcess.t_calls(), [
       { command: 'ledger-empty', args: ['original'], options: { cwd: '/original' } },
     ], '外部修改不应污染统一账本');
@@ -738,7 +740,7 @@ test('calls：参数与选项快照隔离，缺少同步实现的命令也入账
 });
 
 /** 场景：命令实现异常不丢调用记录，退出意图转换为子进程终态，普通异常转换为失败退出。 */
-test('异常分派：同步和异步的退出意图与普通异常均入统一账本', async () => {
+test('异常分派：同步和异步的退出意图与普通异常均入统一账本', async function test_异常分派_同步和异步的退出意图与普通异常均入统一账本() {
   // 输入：建立内存会话，注册分别抛出普通异常与退出意图的用户命令
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/app', { recursive: true });
@@ -785,7 +787,7 @@ test('异常分派：同步和异步的退出意图与普通异常均入统一�
 });
 
 /** 场景：等待真实子进程启动失败时拒绝，内存子进程 kill 缺省信号为 SIGTERM。 */
-test('waitForClose 错误拒绝与 child.kill 缺省信号', async () => {
+test('waitForClose 错误拒绝与 child.kill 缺省信号', async function test_waitForClose_错误拒绝与_child_kill_缺省信号() {
   // 输入：真实 spawn 不存在的可执行文件，等待子进程终态
   const child = liteChildProcess.spawn('/litenvi-ledger-missing-command');
   // 预期 1：启动失败使等待 Promise 以 ENOENT 拒绝
@@ -820,7 +822,7 @@ function f_setupExecReference() {
 }
 
 /** 场景：Node 脚本内的原生 exec 导出和 promisify 仍落内存运行态，父命令等待异步子命令。 */
-test('嵌套 exec：Node 入口复用内存命令，Promise.child 与回包保持原生形状', async () => {
+test('嵌套 exec：Node 入口复用内存命令，Promise.child 与回包保持原生形状', async function test_嵌套_exec_Node_入口复用内存命令_Promise_child_与回包保持原生形状() {
   const done = f_setupExecReference();
   try {
     // 输入：脚本通过原生模块入口调用四个接口及 promisify
@@ -845,7 +847,7 @@ test('嵌套 exec：Node 入口复用内存命令，Promise.child 与回包保�
 });
 
 /** 场景：卸载世界同时取消 exec 的超时及内部命令，不再回调或发出迟到的退出事件。 */
-test('exec 资源清理：unmock 取消超时与在途命令，不再触发回调', async () => {
+test('exec 资源清理：unmock 取消超时与在途命令，不再触发回调', async function test_exec_资源清理_unmock_取消超时与在途命令_不再触发回调() {
   for (const method of ['exec', 'execFile']) {
     const done = f_setupExecReference();
     liteChildProcess.t_unmock();
@@ -868,7 +870,7 @@ test('exec 资源清理：unmock 取消超时与在途命令，不再触发回�
 
 
 /** 场景：内存 shell 的转义与文件重定向可执行，非法语法经子进程错误回包。 */
-test('shell 边界：转义、追加新文件、错误重定向与语法错误', async () => {
+test('shell 边界：转义、追加新文件、错误重定向与语法错误', async function test_shell_边界_转义_追加新文件_错误重定向与语法错误() {
   const done = f_setupExecReference();
   const run = command => new Promise(resolve => liteChildProcess.exec(command, { cwd: EXEC_MEMORY_ROOT },
     (error, stdout, stderr) => resolve({ code: error?.code ?? 0, stdout, stderr })));
@@ -892,7 +894,7 @@ test('shell 边界：转义、追加新文件、错误重定向与语法错误',
 });
 
 /** 场景：暂停发生在启动事件时，命令完成结果与终态在恢复后只送达一次。 */
-test('暂停后的完成：同步回落与异步命令均在 SIGCONT 后输出和关闭', async () => {
+test('暂停后的完成：同步回落与异步命令均在 SIGCONT 后输出和关闭', async function test_暂停后的完成_同步回落与异步命令均在_SIGCONT_后输出和关闭() {
   const done = f_setupExecReference();
   try {
     // 输入：用户命令使用公共实现协议，终态由公开 ChildProcess 事件观察
@@ -920,7 +922,7 @@ test('暂停后的完成：同步回落与异步命令均在 SIGCONT 后输出�
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-child_process.mjs 导入的
  * 门面与库内部相对导入必须是同一实例，否则 mock 边界会静默分裂（exports 变动先红）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('litenvi-node/lite-child_process.mjs');
   assert.equal(selfRef.default, liteChildProcess, '同一模块经不同 specifier 应共享同一实例');

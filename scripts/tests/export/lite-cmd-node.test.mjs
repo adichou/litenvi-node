@@ -41,7 +41,7 @@ function f_writeFixture(code) {
 }
 
 /** 场景：模拟 npm 固定版本，不依赖宿主 PATH 或 npm 安装。 */
-test('npm 固定版本：空 PATH 也返回 10.9.0', () => {
+test('npm 固定版本：空 PATH 也返回 10.9.0', function test_npm_固定版本_空_PATH_也返回_10_9_0() {
   const done = f_setup();
   const originalPath = process.env.PATH;
   try {
@@ -72,7 +72,7 @@ test('npm 固定版本：空 PATH 也返回 10.9.0', () => {
 });
 
 /** 场景：真实测试夹具执行名称筛选、重复运行、失败退出和实际覆盖率，不回放 TAP。 */
-test('node --test：真实断言、名称过滤、重复执行及覆盖率', async () => {
+test('node --test：真实断言、名称过滤、重复执行及覆盖率', async function test_node_test_真实断言_名称过滤_重复执行及覆盖率() {
   const fixture = f_writeFixture(`
     import { test } from 'node:test';
     import assert from 'node:assert/strict';
@@ -117,7 +117,7 @@ test('node --test：真实断言、名称过滤、重复执行及覆盖率', asy
 });
 
 /** 场景：测试启动参数、源码作用域和执行错误均明确失败，不能悄悄回退或产生成功 TAP。 */
-test('node --test 边界：非法参数、缺失源码与内存独有源码明确失败', async () => {
+test('node --test 边界：非法参数、缺失源码与内存独有源码明确失败', async function test_node_test_边界_非法参数_缺失源码与内存独有源码明确失败() {
   const fixture = f_writeFixture(`import { test } from 'node:test'; test('probe', () => console.log('真实执行'));`);
   const done = f_setup();
   liteFs.mkdirSync('/mock', { recursive: true });
@@ -150,7 +150,7 @@ test('node --test 边界：非法参数、缺失源码与内存独有源码明�
 
 
 /** 场景：等待中的真实测试 Worker 随虚拟子进程终止，后续命令仍正常运行。 */
-test('node --test 信号：终止等待中的真实 Worker 并清理资源', async () => {
+test('node --test 信号：终止等待中的真实 Worker 并清理资源', async function test_node_test_信号_终止等待中的真实_Worker_并清理资源() {
   const fixture = f_writeFixture(`
     import { test } from 'node:test';
     test('blocked', async () => {
@@ -184,7 +184,7 @@ test('node --test 信号：终止等待中的真实 Worker 并清理资源', asy
 /** 场景：虚拟 Node 命令运行期间不替换原生 fs，CJS、ESM 默认和具名导入保持同一原生接口。
 
 /** 场景：自研入口显式使用 lite-fs 执行读写和业务计算，写入故障经脚本处理后反映到 stderr 与退出码。 */
-test('显式文件边界：lite-fs 读写与故障传播', async () => {
+test('显式文件边界：lite-fs 读写与故障传播', async function test_显式文件边界_lite_fs_读写与故障传播() {
   liteChildProcess.t_unmock();
   liteFs.t_unmock();
   const fixture = f_writeFixture(`
@@ -231,7 +231,7 @@ test('显式文件边界：lite-fs 读写与故障传播', async () => {
 });
 
 /** 场景：入口通过原生 child_process 导出调用嵌套命令，执行仍统一留在内存分派中。 */
-test('嵌套命令：spawn/spawnSync 统一入账，未实现的 fork 明确失败', async () => {
+test('嵌套命令：spawn/spawnSync 统一入账，未实现的 fork 明确失败', async function test_嵌套命令_spawn_spawnSync_统一入账_未实现的_fork_明确失败() {
   const fixture = f_writeFixture(`
     import { spawn, spawnSync, fork } from 'node:child_process';
     console.log(spawnSync('echo', ['nested-sync'], { encoding: 'utf8' }).stdout.trim());
@@ -257,7 +257,7 @@ test('嵌套命令：spawn/spawnSync 统一入账，未实现的 fork 明确失�
 });
 
 /** 场景：导入即登记——lite-cmd-node 被 import 后，mgr 注册表可按名寻址 node 与 npm 实现。 */
-test('导入即登记：node/npm 在 mgr 登记名单、node 命令路径为 execPath 常量', () => {
+test('导入即登记：node/npm 在 mgr 登记名单、node 命令路径为 execPath 常量', function test_导入即登记_node_npm_在_mgr_登记名单_node_命令路径为_execPath_常量() {
   // 输入：读 mgr 注册表自省名单
   // 预期 1：node 完整路径在名单
   assert.ok(mgr.t_defined().includes(NODE_COMMAND_PATH), 'node 应在登记名单');
@@ -270,7 +270,7 @@ test('导入即登记：node/npm 在 mgr 登记名单、node 命令路径为 exe
 });
 
 /** 场景：版本探测——node 使用宿主版本，npm 固定为 10.9.0。 */
-test('版本探测：node 回宿主版本，npm 回固定 10.9.0', () => {
+test('版本探测：node 回宿主版本，npm 回固定 10.9.0', function test_版本探测_node_回宿主版本_npm_回固定_10_9_0() {
   const done = f_setup();
   try {
     // 输入：spawnSync node -v / npm -v
@@ -290,7 +290,7 @@ test('版本探测：node 回宿主版本，npm 回固定 10.9.0', () => {
 });
 
 /** 场景：入口脚本执行——.mjs 入口执行真实源码，副作用/env/argv 均为子进程口径。 */
-test('入口脚本执行：真实源码、env 落位、argv 子进程口径、旗标剔除', async () => {
+test('入口脚本执行：真实源码、env 落位、argv 子进程口径、旗标剔除', async function test_入口脚本执行_真实源码_env_落位_argv_子进程口径_旗标剔除() {
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync('/mock/project', { recursive: true }); // fixture 副作用目录（卷内；缺失则入口写入 ENOENT）
   liteProcess.t_mock({ cwd: '/mock/project' });
@@ -327,7 +327,7 @@ liteFs.writeFileSync('/mock/project/fixture-out.json', JSON.stringify({
 });
 
 /** 场景：假世界并发执行 Node 文件入口，argv 双视图一致、子进程互不串线且父世界保持原值。 */
-test('假世界文件入口：argv 双视图一致、并发隔离与父世界保持', async () => {
+test('假世界文件入口：argv 双视图一致、并发隔离与父世界保持', async function test_假世界文件入口_argv_双视图一致_并发隔离与父世界保持() {
   // 输入：父世界 argv 为 parent.mjs --parent，入口记录两条 argv 视图并等待 stdin 放行
   const nativeArgv = process.argv;
   const parentArgv = [NODE_COMMAND_PATH, '/mock/project/parent.mjs', '--parent'];
@@ -407,7 +407,7 @@ test('假世界文件入口：argv 双视图一致、并发隔离与父世界保
 });
 
 /** 场景：假世界文件入口异常退出或被终止后，父世界与宿主 argv 保持原值。 */
-test('假世界文件入口：异常退出与 kill 保持父世界 argv', async () => {
+test('假世界文件入口：异常退出与 kill 保持父世界 argv', async function test_假世界文件入口_异常退出与_kill_保持父世界_argv() {
   // 输入：入口先输出两条 argv 视图，收到 stdin 后抛错或显式退出；kill 场景保持等待
   const nativeArgv = process.argv;
   const parentArgv = [NODE_COMMAND_PATH, '/mock/project/parent.mjs', '--parent'];
@@ -460,7 +460,7 @@ test('假世界文件入口：异常退出与 kill 保持父世界 argv', async 
 });
 
 /** 场景：入口加载失败——顶层抛错的入口按子进程异常退出收场（stderr + exit 1）。 */
-test('入口加载失败：stderr 带错误信息、退出码 1', async () => {
+test('入口加载失败：stderr 带错误信息、退出码 1', async function test_入口加载失败_stderr_带错误信息_退出码_1() {
   liteFs.t_mock({ exclude: [EXCLUDED] });
   const fixture = f_writeFixture(`throw new Error('fixture-boom');`);
   liteChildProcess.t_mock();
@@ -481,7 +481,7 @@ test('入口加载失败：stderr 带错误信息、退出码 1', async () => {
 });
 
 /** 场景：内联求值——-e 执行代码，stdout 写入子进程管道并正常退出。 */
-test('内联求值：-e 输出进入 stdout，执行结束正常退出', async () => {
+test('内联求值：-e 输出进入 stdout，执行结束正常退出', async function test_内联求值_e_输出进入_stdout_执行结束正常退出() {
   const done = f_setup();
   try {
     // 输入：spawn node -e，输出一个值
@@ -499,7 +499,7 @@ test('内联求值：-e 输出进入 stdout，执行结束正常退出', async (
 });
 
 /** 场景：长驻任务——定时器保持 Node 存活，kill 后取消定时器并关闭子进程。 */
-test('长驻任务：定时器保持存活，kill 后停止输出并关闭', async () => {
+test('长驻任务：定时器保持存活，kill 后停止输出并关闭', async function test_长驻任务_定时器保持存活_kill_后停止输出并关闭() {
   const done = f_setup();
   try {
     // 输入：启动持续输出的 Node 定时器，收到首条输出后终止
@@ -522,7 +522,7 @@ test('长驻任务：定时器保持存活，kill 后停止输出并关闭', asy
 });
 
 /** 场景：共享服务门面——入口使用调用方的 liteServer 环境，关闭监听后正常退出。 */
-test('共享服务门面：内存服务关闭后 Node 正常退出', async () => {
+test('共享服务门面：内存服务关闭后 Node 正常退出', async function test_共享服务门面_内存服务关闭后_Node_正常退出() {
   const done = f_setup();
   liteServer.t_mock();
   const serverUrl = new URL('../../lite-server.mjs', import.meta.url).href;
@@ -557,7 +557,7 @@ test('共享服务门面：内存服务关闭后 Node 正常退出', async () =>
 });
 
 /** 场景：撤销环境——unmock 停止子进程任务，防止定时器继续修改内存文件。 */
-test('撤销环境：unmock 后定时器不再产生文件副作用', async () => {
+test('撤销环境：unmock 后定时器不再产生文件副作用', async function test_撤销环境_unmock_后定时器不再产生文件副作用() {
   const fixture = f_writeFixture(`
     let count = 0;
     const timer = setInterval(() => {
@@ -583,7 +583,7 @@ test('撤销环境：unmock 后定时器不再产生文件副作用', async () =
 });
 
 /** 场景：同步入口限制——spawnSync('node', [入口]) 未实现（import 是异步的），失败并指引。 */
-test('同步入口限制：spawnSync 入口按失败收场并指引改用 spawn', () => {
+test('同步入口限制：spawnSync 入口按失败收场并指引改用 spawn', function test_同步入口限制_spawnSync_入口按失败收场并指引改用_spawn() {
   const done = f_setup();
   try {
     // 输入：spawnSync node 带入口参数
@@ -598,7 +598,7 @@ test('同步入口限制：spawnSync 入口按失败收场并指引改用 spawn'
 });
 
 /** 场景：npm 参数边界——除 -v 外的参数未实现内存语义，按失败收场。 */
-test('npm 参数边界：非 -v 参数按失败收场', () => {
+test('npm 参数边界：非 -v 参数按失败收场', function test_npm_参数边界_非_v_参数按失败收场() {
   const done = f_setup();
   try {
     // 输入：spawnSync npm test
@@ -614,7 +614,7 @@ test('npm 参数边界：非 -v 参数按失败收场', () => {
 
 
 /** 场景：-- 结束选项解析，脚本与 stdin 两条公共执行路径均能输出结果。 */
-test('Node 选项终止符：-- 后运行脚本，无脚本时读取 stdin', async () => {
+test('Node 选项终止符：-- 后运行脚本，无脚本时读取 stdin', async function test_Node_选项终止符_后运行脚本_无脚本时读取_stdin() {
   const done = f_setup();
   const fixture = f_writeFixture('console.log(process.argv.slice(2).join("|"));');
   const run = (args, input) => {
@@ -635,7 +635,7 @@ test('Node 选项终止符：-- 后运行脚本，无脚本时读取 stdin', asy
 });
 
 /** 场景：脚本重设 process 字段仅影响虚拟运行态，宿主同时写 argv 后仍能恢复。 */
-test('Process 字段写入：脚本与宿主环境保持各自视图', async () => {
+test('Process 字段写入：脚本与宿主环境保持各自视图', async function test_Process_字段写入_脚本与宿主环境保持各自视图() {
   const done = f_setup();
   const originalArgv = process.argv;
   const originalEnv = process.env;
@@ -667,7 +667,7 @@ test('Process 字段写入：脚本与宿主环境保持各自视图', async () 
 
 
 /** 场景：信号到达虚拟进程时已注册处理器则消费执行，未注册则按默认语义终止。 */
-test('内存 Node 收到信号时执行处理器，未处理信号仍直接终止', async () => {
+test('内存 Node 收到信号时执行处理器，未处理信号仍直接终止', async function test_内存_Node_收到信号时执行处理器_未处理信号仍直接终止() {
   // 输入：虚拟进程注册 SIGTERM 处理器后收信号，对照未注册形态。
   const done = f_setup();
   try {
@@ -687,7 +687,7 @@ test('内存 Node 收到信号时执行处理器，未处理信号仍直接终�
 });
 
 /** 场景：虚拟进程内经 process.kill 探测自身与他者 PID 的存活语义。 */
-test('内存 Node 通过 process.kill 检查虚拟进程存活', async () => {
+test('内存 Node 通过 process.kill 检查虚拟进程存活', async function test_内存_Node_通过_process_kill_检查虚拟进程存活() {
   // 输入：进程脚本内经 process.kill 以信号 0 探测自身与未知 PID。
   const done = f_setup();
   try {
@@ -705,7 +705,7 @@ test('内存 Node 通过 process.kill 检查虚拟进程存活', async () => {
 });
 
 /** 场景：服务关闭回调挂起不阻塞信号关停的进程内兜底退出路径。 */
-test('信号关停遇到服务关闭挂起时仍触发进程内兜底退出', async () => {
+test('信号关停遇到服务关闭挂起时仍触发进程内兜底退出', async function test_信号关停遇到服务关闭挂起时仍触发进程内兜底退出() {
   // 输入：关闭回调注入挂起故障后向进程发送关停信号。
   const done = f_setup();
   liteServer.t_mock();
@@ -734,7 +734,7 @@ test('信号关停遇到服务关闭挂起时仍触发进程内兜底退出', as
 });
 
 /** 场景：spawn 输入暂存为 fd 0——脚本内 liteFs.readFileSync(0) 同步读到 spawn 的 input；无输入读得空串。 */
-test('stdin 同步读面：脚本 liteFs.readFileSync(0) 收到 spawn input，无输入为空', async () => {
+test('stdin 同步读面：脚本 liteFs.readFileSync(0) 收到 spawn input，无输入为空', async function test_stdin_同步读面_脚本_liteFs_readFileSync_0_收到_spawn_input_无输入为空() {
   const done = f_setup();
   const fixture = f_writeFixture(`
     process.stdout.write(liteFs.readFileSync(0, 'utf8'));
@@ -760,7 +760,7 @@ test('stdin 同步读面：脚本 liteFs.readFileSync(0) 收到 spawn input，�
 });
 
 /** 场景：跨运行隔离——上一次运行的 fd 0 暂存在 dispose 时释放，后继运行只读到自己的输入。 */
-test('stdin 暂存跨运行隔离：第二次运行不残留第一次输入', async () => {
+test('stdin 暂存跨运行隔离：第二次运行不残留第一次输入', async function test_stdin_暂存跨运行隔离_第二次运行不残留第一次输入() {
   const done = f_setup();
   const fixture = f_writeFixture(`
     process.stdout.write(liteFs.readFileSync(0, 'utf8'));
@@ -783,7 +783,7 @@ test('stdin 暂存跨运行隔离：第二次运行不残留第一次输入', as
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——命令集无独立门面实例，以测试协作面
  * t_commands 的函数身份验证（业务经 litenvi-node/lite-cmd-node.mjs 导入须与库内部相对导入一致）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('litenvi-node/lite-cmd-node.mjs');
   assert.equal(selfRef.t_commands(), t_commands(), '同一模块经不同 specifier 应共享同一实例');
@@ -791,7 +791,7 @@ test('包自引用 specifier 与相对导入共享同一单例', async () => {
 
 /** 场景：npm run 在内存世界执行 package.json 脚本——banner、嵌套命令输出、退出码与 `--`
  * 参数透传均经内存分派，未找到脚本/清单、未登记命令与 shell 语法明确失败。 */
-test('npm run：内存执行脚本、banner 与退出码透传', async () => {
+test('npm run：内存执行脚本、banner 与退出码透传', async function test_npm_run_内存执行脚本_banner_与退出码透传() {
   const done = f_setup();
   const helloFixture = f_writeFixture("console.log('hello-out');");
   try {
@@ -841,7 +841,7 @@ test('npm run：内存执行脚本、banner 与退出码透传', async () => {
 
 /** 场景：npm run 同步面要求嵌套命令提供同步实现；用户级命令可同步执行，异步专用命令明确
  * 报 127；信号转发给嵌套命令并由其结算退出码。 */
-test('npm run：同步面限制与信号转发', async () => {
+test('npm run：同步面限制与信号转发', async function test_npm_run_同步面限制与信号转发() {
   const done = f_setup();
   const slowFixture = f_writeFixture("process.stdout.write('ready');\nprocess.on('SIGTERM', () => { process.stdout.write('term'); process.exit(3); });\n");
   try {

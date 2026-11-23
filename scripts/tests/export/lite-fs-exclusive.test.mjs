@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import liteFs from '../../lite-fs.mjs';
 
 /** 场景：wx 形态独占创建在目标已存在（文件与符号链接）时明确失败。 */
-test('独占创建不能覆盖已有文件或符号链接', () => {
+test('独占创建不能覆盖已有文件或符号链接', function test_独占创建不能覆盖已有文件或符号链接() {
   // 输入：对已存在的普通文件与符号链接分别执行 wx 独占创建。
   liteFs.t_mock({ exclude: ['/excluded-system-source'] });
   try {

@@ -11,7 +11,7 @@ const EXCLUDED = selfFile.slice(0, selfFile.lastIndexOf('/')); // 排除目录�
 const ROOT = '/data/lite-fs-root'; // 内存卷路径（真实磁盘不存在的绝对路径）
 
 /** 场景：作用域参数前置校验——exclude 必填、已废弃的 roots 白名单口径拒绝。 */
-test('exclude 必填：mock() 不带 exclude（含仅传已废弃的 roots）应拒绝', () => {
+test('exclude 必填：mock() 不带 exclude（含仅传已废弃的 roots）应拒绝', function test_exclude_必填_mock_不带_exclude_含仅传已废弃的_roots_应拒绝() {
   // 输入：mock() 不带任何参数
   // 预期 1：拒绝并提示 exclude
   assert.throws(() => liteFs.t_mock(), /exclude/, '无排除目录应拒绝 mock');
@@ -21,7 +21,7 @@ test('exclude 必填：mock() 不带 exclude（含仅传已废弃的 roots）应
 });
 
 /** 场景：卷内内存卷基本面——黑名单外路径的读写/追加/清单/stat 自洽。 */
-test('卷内内存卷基本面：mkdir/write/read/append/readdir/stat 自洽', () => {
+test('卷内内存卷基本面：mkdir/write/read/append/readdir/stat 自洽', function test_卷内内存卷基本面_mkdir_write_read_append_readdir_stat_自洽() {
   // 输入：mock 黑名单后递归建目录、写入并追加内容
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
@@ -57,7 +57,7 @@ test('卷内内存卷基本面：mkdir/write/read/append/readdir/stat 自洽', (
 });
 
 /** 场景：真实错误语义——卷内操作按 node:fs 同款错误码失败，不静默成功。 */
-test('真实错误语义：ENOENT/EEXIST/ENOTDIR/ERR_FS_EISDIR/EISDIR', () => {
+test('真实错误语义：ENOENT/EEXIST/ENOTDIR/ERR_FS_EISDIR/EISDIR', function test_真实错误语义_ENOENT_EEXIST_ENOTDIR_ERR_FS_EISDIR_EISDIR() {
   // 输入：建目录并写入一个文件，作为后续错误操作的现场
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
@@ -87,7 +87,7 @@ test('真实错误语义：ENOENT/EEXIST/ENOTDIR/ERR_FS_EISDIR/EISDIR', () => {
 });
 
 /** 场景：树操作——rename/copyFile/cp 递归/rm 递归在卷内自洽。 */
-test('移动/复制/递归删除：rename/copyFile/cp -r/rm -r 树操作自洽', () => {
+test('移动/复制/递归删除：rename/copyFile/cp -r/rm -r 树操作自洽', function test_移动_复制_递归删除_rename_copyFile_cp_r_rm_r_树操作自洽() {
   // 输入：建子树（子目录含文件 + 根下另一文件）后依次 rename、copyFile、cp 递归、rm 递归
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
@@ -112,7 +112,7 @@ test('移动/复制/递归删除：rename/copyFile/cp -r/rm -r 树操作自洽',
 });
 
 /** 场景：fd 面——openSync 打开即建、closeSync 释放、重复 close 报 EBADF。 */
-test('fd 面：openSync(a)/closeSync、内容可读、坏 fd EBADF', () => {
+test('fd 面：openSync(a)/closeSync、内容可读、坏 fd EBADF', function test_fd_面_openSync_a_closeSync_内容可读_坏_fd_EBADF() {
   // 输入：建根目录后 openSync('a') 打开新文件、追加一行、close 释放
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
@@ -134,7 +134,7 @@ test('fd 面：openSync(a)/closeSync、内容可读、坏 fd EBADF', () => {
 });
 
 /** 场景：fd 定位读——readSync 按显式 position 从卷内文件切片回填，坏 fd EBADF。 */
-test('fd 面：readSync 按 position 定位读、越界截断与坏 fd EBADF', () => {
+test('fd 面：readSync 按 position 定位读、越界截断与坏 fd EBADF', function test_fd_面_readSync_按_position_定位读_越界截断与坏_fd_EBADF() {
   // 输入：写入 10 字节种子文件，openSync('r') 取 fd
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
@@ -158,7 +158,7 @@ test('fd 面：readSync 按 position 定位读、越界截断与坏 fd EBADF', (
 });
 
 /** 场景：错误注入——inject 只拦命中操作与路径，撤销后恢复。 */
-test('错误注入：对写入路径注入 EACCES 只拦写入、读取不受影响、撤销恢复', () => {
+test('错误注入：对写入路径注入 EACCES 只拦写入、读取不受影响、撤销恢复', function test_错误注入_对写入路径注入_EACCES_只拦写入_读取不受影响_撤销恢复() {
   // 输入：建文件写入种子内容，对 writeFileSync+该路径注入 EACCES
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
@@ -180,7 +180,7 @@ test('错误注入：对写入路径注入 EACCES 只拦写入、读取不受影
 });
 
 /** 场景：谓词注入——matches(target) 动态判定命中面，撤销后恢复（exact path 之外的动态口径）。 */
-test('错误注入：matches 谓词按目标动态命中、其余目标不受影响', () => {
+test('错误注入：matches 谓词按目标动态命中、其余目标不受影响', function test_错误注入_matches_谓词按目标动态命中_其余目标不受影响() {
   // 输入：两个文件，注入仅命中 /hit 前缀的谓词
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
@@ -204,7 +204,7 @@ test('错误注入：matches 谓词按目标动态命中、其余目标不受影
 });
 
 /** 场景：error 实例注入——预制错误按原样抛出（自定义文案与 code 字段保留），code 与 error 二选一。 */
-test('错误注入：error 实例按原样抛出、code 与 error 二选一', () => {
+test('错误注入：error 实例按原样抛出、code 与 error 二选一', function test_错误注入_error_实例按原样抛出_code_与_error_二选一() {
   // 输入：mock 后写种子文件，注入仅携带 error 实例（无 code 字段）
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
@@ -232,7 +232,7 @@ test('错误注入：error 实例按原样抛出、code 与 error 二选一', ()
 });
 
 /** 场景：未实现面与前置约束——卷内未覆盖操作明确报错，未 mock 时 inject 拒绝。 */
-test('卷内未实现面与前置约束：truncateSync 明确报错、未 mock 即 inject 拒绝', () => {
+test('卷内未实现面与前置约束：truncateSync 明确报错、未 mock 即 inject 拒绝', function test_卷内未实现面与前置约束_truncateSync_明确报错_未_mock_即_inject_拒绝() {
   // 输入：mock 后调用内存卷未实现的 truncateSync
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
@@ -247,7 +247,7 @@ test('卷内未实现面与前置约束：truncateSync 明确报错、未 mock �
 });
 
 /** 场景：幂等与恢复——重复 mock 复用既有卷，unmock 后回真实 fs 语义。 */
-test('幂等与恢复：重复 mock 保留卷、unmock 后卷内路径按真实 fs 语义', () => {
+test('幂等与恢复：重复 mock 保留卷、unmock 后卷内路径按真实 fs 语义', function test_幂等与恢复_重复_mock_保留卷_unmock_后卷内路径按真实_fs_语义() {
   // 输入：mock 后写入文件，再次 mock（幂等）
   liteFs.t_mock({ exclude: [EXCLUDED] });
   liteFs.mkdirSync(ROOT, { recursive: true });
@@ -263,7 +263,7 @@ test('幂等与恢复：重复 mock 保留卷、unmock 后卷内路径按真实 
 
 
 /** 场景：嵌套持久目录在复位后恢复父链，非持久目录不会保留。 */
-test('嵌套持久根：复位后恢复目录父链与文件内容', () => {
+test('嵌套持久根：复位后恢复目录父链与文件内容', function test_嵌套持久根_复位后恢复目录父链与文件内容() {
   liteFs.markPersistent('/coverage-persistent/parent/data');
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
@@ -282,7 +282,7 @@ test('嵌套持久根：复位后恢复目录父链与文件内容', () => {
 
 
 /** 场景：utimesSync 更新卷内文件 mtimeMs，目录 no-op，缺失与非法参数按既有错误语义明确报错。 */
-test('utimesSync：文件时间回写、目录 no-op、缺失 ENOENT 与非法参数 TypeError', () => {
+test('utimesSync：文件时间回写、目录 no-op、缺失 ENOENT 与非法参数 TypeError', function test_utimesSync_文件时间回写_目录_no_op_缺失_ENOENT_与非法参数_TypeError() {
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
     // 输入：卷内新文件与目录
@@ -305,7 +305,7 @@ test('utimesSync：文件时间回写、目录 no-op、缺失 ENOENT 与非法�
 });
 
 /** 场景：fd 0 管道型暂存——readFileSync/readSync 同步消费输入快照，写侧 EBADF，重复暂存覆盖。 */
-test('fd 0 暂存：stdin 快照同步可读、写侧 EBADF、重复暂存以最后一次为准', () => {
+test('fd 0 暂存：stdin 快照同步可读、写侧 EBADF、重复暂存以最后一次为准', function test_fd_0_暂存_stdin_快照同步可读_写侧_EBADF_重复暂存以最后一次为准() {
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
     // 输入：t_stageStdin 登记输入快照
@@ -327,7 +327,7 @@ test('fd 0 暂存：stdin 快照同步可读、写侧 EBADF、重复暂存以最
 });
 
 /** 场景：realpathSync 解析符号链接链（目录别名/文件链接/中间段），循环 ELOOP、缺失 ENOENT。 */
-test('realpathSync：软链解析与原生一致、循环 ELOOP、缺失 ENOENT', () => {
+test('realpathSync：软链解析与原生一致、循环 ELOOP、缺失 ENOENT', function test_realpathSync_软链解析与原生一致_循环_ELOOP_缺失_ENOENT() {
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
     // 输入：目录别名指向深层目录、文件链接指向既有文件
@@ -348,7 +348,7 @@ test('realpathSync：软链解析与原生一致、循环 ELOOP、缺失 ENOENT'
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-fs.mjs 导入的
  * 门面与库内部相对导入必须是同一实例，否则内存世界会静默分裂（exports 变动先红）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('../../lite-fs.mjs');
   assert.equal(selfRef.default, liteFs, '同一模块经不同 specifier 应共享同一实例');

@@ -29,6 +29,7 @@
 // 的 chdir/exit/kill 转调同口径）。命令条目携带通用接口：execPath（可执行路径）与当前执行
 // argv 查询（i_currentArgv——分派层建立、进程门面读取）。状态为模块级单例：同进程内经同一
 // specifier 导入共享。
+// 同步钩子误返回 Promise 时立即拒绝，后续 Promise 拒绝会记录原始错误，避免未处理或静默丢弃。
 import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import liteFs from './lite-fs.mjs';
@@ -178,7 +179,7 @@ function f_createEntry(p, impl) {
                 };
                 const out = entry.i_script(call, f_runBuiltin);
                 if (out && typeof out.then === 'function') {
-                    Promise.resolve(out).catch(() => {}); // 已明确拒绝；消费可能的拒绝，避免泄漏未处理异常。
+                    Promise.resolve(out).catch(error => { console.warn('同步命令钩子返回的 Promise 已拒绝：', error); });
                     throw new TypeError('同步命令钩子不能返回 Promise；请通过异步子进程入口执行');
                 }
                 if (out !== undefined)

@@ -15,7 +15,7 @@ import { i_urlInjectionRequest } from '../lite-http-helpers.mjs';
 
 
 /** 场景：虚拟服务关闭走故障闸门，关闭后路由立即失效。 */
-test('虚拟服务关闭同样遵守故障闸门且立即停止路由', async () => {
+test('虚拟服务关闭同样遵守故障闸门且立即停止路由', async function test_虚拟服务关闭同样遵守故障闸门且立即停止路由() {
   // 输入：虚拟服务注入关闭故障后请求并解除注入。
   liteHttp.t_mock(); liteServer.t_mock();
   const gate = Promise.withResolvers();
@@ -79,7 +79,7 @@ const f_boardHandler = (req, res) => {
 };
 
 /** 场景：内存路由基本面——登记 handler 后 loopback 请求回包来自真实路由代码。 */
-test('内存路由基本面：loopback GET 回包来自真实 handler', async () => {
+test('内存路由基本面：loopback GET 回包来自真实 handler', async function test_内存路由基本面_loopback_GET_回包来自真实_handler() {
   // 输入：登记带执行标记的 handler，经内存客户端 GET /api/echo?a=1
   let handlerRan = false;
   const out = await f_withBoard(
@@ -101,7 +101,7 @@ test('内存路由基本面：loopback GET 回包来自真实 handler', async ()
 });
 
 /** 场景：无监听服务——mock 但未登记服务或端口不符时按拒连。 */
-test('无监听服务：未登记服务/端口不符按 ECONNREFUSED 拒连', async () => {
+test('无监听服务：未登记服务/端口不符按 ECONNREFUSED 拒连', async function test_无监听服务_未登记服务_端口不符按_ECONNREFUSED_拒连() {
   // 输入：mock 两门面但不 createServer，探活默认端口
   liteHttp.t_mock();
   liteServer.t_mock();
@@ -120,7 +120,7 @@ test('无监听服务：未登记服务/端口不符按 ECONNREFUSED 拒连', as
 });
 
 /** 场景：服务端故障替换回包——handler 已执行，注入 503 替换真实回包。 */
-test('服务端故障：注入 503 替换回包、handler 已执行、回包带故障标记', async () => {
+test('服务端故障：注入 503 替换回包、handler 已执行、回包带故障标记', async function test_服务端故障_注入_503_替换回包_handler_已执行_回包带故障标记() {
   // 输入：登记带执行标记的 handler，注入 503 服务端故障后请求
   let handlerRan = false;
   const out = await f_withBoard(
@@ -147,7 +147,7 @@ test('服务端故障：注入 503 替换回包、handler 已执行、回包带�
 });
 
 /** 场景：wait 闸门挂起回包——放行前无回包，放行后送达真实回包。 */
-test('wait 闸门：放行前无回包、放行后真实回包不带故障标记', async () => {
+test('wait 闸门：放行前无回包、放行后真实回包不带故障标记', async function test_wait_闸门_放行前无回包_放行后真实回包不带故障标记() {
   // 输入：注入 wait 闸门的服务端故障，200ms 内观察是否有回包
   const gate = Promise.withResolvers();
   const pending = await f_withBoard(
@@ -182,7 +182,7 @@ test('wait 闸门：放行前无回包、放行后真实回包不带故障标记
 });
 
 /** 场景：once 自毁与非法注入——once 只拦一次，2xx/phase 字段与未 mock 注入均拒绝。 */
-test('once 自毁与注入校验：只拦一次、2xx/phase/未 mock 注入拒绝', async () => {
+test('once 自毁与注入校验：只拦一次、2xx/phase/未 mock 注入拒绝', async function test_once_自毁与注入校验_只拦一次_2xx_phase_未_mock_注入拒绝() {
   // 输入：注入 once 503 后连续两次请求
   const out = await f_withBoard(
     (req, res) => res.end(JSON.stringify({ ok: true })),
@@ -219,7 +219,7 @@ test('once 自毁与注入校验：只拦一次、2xx/phase/未 mock 注入拒�
 
 
 /** 场景：未 listen 即 close——无 socket 可关时回调即时送达。 */
-test('未 listen 即 close：回调即时送达', async () => {
+test('未 listen 即 close：回调即时送达', async function test_未_listen_即_close_回调即时送达() {
   // 输入：mock 后 createServer 不 listen 直接 close
   liteHttp.t_mock();
   liteServer.t_mock();
@@ -240,7 +240,7 @@ test('未 listen 即 close：回调即时送达', async () => {
 
 
 /** 场景：关闭故障注入可延迟关闭回调，解除注入后回调完成。 */
-test('服务关闭故障闸门延迟关闭回调并可释放', async () => {
+test('服务关闭故障闸门延迟关闭回调并可释放', async function test_服务关闭故障闸门延迟关闭回调并可释放() {
   // 输入：关闭回调挂故障闸门，延迟后释放并确认回调完成。
   liteHttp.t_mock();
   liteServer.t_mock();
@@ -263,14 +263,14 @@ test('服务关闭故障闸门延迟关闭回调并可释放', async () => {
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-server.mjs 导入的
  * 门面与库内部相对导入必须是同一实例，否则服务账本会静默分裂（exports 变动先红）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('../../lite-server.mjs');
   assert.equal(selfRef.default, liteServer, '同一模块经不同 specifier 应共享同一实例');
 });
 
 /** 场景：服务端复位撤销旧路由且不清客户端故障，重建后只执行新 handler。 */
-test('服务端复位撤销旧路由并保留客户端故障', async () => {
+test('服务端复位撤销旧路由并保留客户端故障', async function test_服务端复位撤销旧路由并保留客户端故障() {
   // 输入：保留客户端配置，卸载服务端后在相同地址登记新服务。
   const f_send = (path = '/') => i_urlInjectionRequest(liteHttp, { hostname: 'transport.test', port: 443, path });
   liteHttp.t_unmock(); liteServer.t_unmock();

@@ -25,7 +25,7 @@ function f_probe(port, path = '/api/health') {
 }
 
 /** 场景：传输层故障注入——命中规则的请求收到注入的错误响应。 */
-test('注入 500：命中路径的探活收到 500 与错误正文', async () => {
+test('注入 500：命中路径的探活收到 500 与错误正文', async function test_注入_500_命中路径的探活收到_500_与错误正文() {
   // 输入：mock 后对探活路径注入 500 故障
   liteHttp.t_mock();
   let removeFault;
@@ -45,7 +45,7 @@ test('注入 500：命中路径的探活收到 500 与错误正文', async () =>
 });
 
 /** 场景：规则未命中——无规则路径按拒连模拟接口无法访问。 */
-test('规则未命中：无规则路径按 ECONNREFUSED 拒连', async () => {
+test('规则未命中：无规则路径按 ECONNREFUSED 拒连', async function test_规则未命中_无规则路径按_ECONNREFUSED_拒连() {
   // 输入：对 /api/health 注入规则后探活无规则的 /api/other
   liteHttp.t_mock();
   let removeFault;
@@ -63,7 +63,7 @@ test('规则未命中：无规则路径按 ECONNREFUSED 拒连', async () => {
 });
 
 /** 场景：get 简写——http.get 形状与 request 同口径受注入规则约束。 */
-test('get 简写：与 request 同口径命中注入 500', async () => {
+test('get 简写：与 request 同口径命中注入 500', async function test_get_简写_与_request_同口径命中注入_500() {
   // 输入：注入 500 后经 liteHttp.get 发起请求
   liteHttp.t_mock();
   let removeFault;
@@ -87,7 +87,7 @@ test('get 简写：与 request 同口径命中注入 500', async () => {
 });
 
 /** 场景：非法注入与前置约束——2xx 成功回包替换拒绝、未 mock 即注入拒绝。 */
-test('非法注入与前置约束：2xx 拒绝、未 mock 即 inject 拒绝', async () => {
+test('非法注入与前置约束：2xx 拒绝、未 mock 即 inject 拒绝', async function test_非法注入与前置约束_2xx_拒绝_未_mock_即_inject_拒绝() {
   // 输入：mock 后注入 200 成功回包
   liteHttp.t_mock();
   try {
@@ -102,7 +102,7 @@ test('非法注入与前置约束：2xx 拒绝、未 mock 即 inject 拒绝', as
 });
 
 /** 场景：移除函数——注入返回的移除函数撤规则后回到拒连，且幂等。 */
-test('移除函数：撤规则后回到拒连、重复调用幂等', async () => {
+test('移除函数：撤规则后回到拒连、重复调用幂等', async function test_移除函数_撤规则后回到拒连_重复调用幂等() {
   // 输入：注入 500 后调用返回的移除函数（两次验证幂等）
   liteHttp.t_mock();
   try {
@@ -122,7 +122,7 @@ test('移除函数：撤规则后回到拒连、重复调用幂等', async () =>
 });
 
 /** 场景：幂等与恢复——重复 mock 复用既有规则，unmock 回真实 node:http。 */
-test('幂等与恢复：重复 mock 保留规则、unmock 回真实实现', async () => {
+test('幂等与恢复：重复 mock 保留规则、unmock 回真实实现', async function test_幂等与恢复_重复_mock_保留规则_unmock_回真实实现() {
   // 输入：注入规则后重复 mock（幂等）、再 unmock 探活
   liteHttp.t_mock();
   const removeFault = liteHttp.t_inject({ path: '/api/health', status: 500 });
@@ -138,7 +138,7 @@ test('幂等与恢复：重复 mock 保留规则、unmock 回真实实现', asyn
 });
 
 /** 场景：URL 定向传输故障，来源、端口、完整查询串与方法分别隔离，未命中不消耗 once。 */
-test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离', async () => {
+test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离', async function test_URL_注入_绝对地址_路径_查询顺序_方法与_once_隔离() {
   liteHttp.t_mock();
   liteServer.t_mock();
   let handled = 0;
@@ -187,7 +187,7 @@ test('URL 注入：绝对地址、路径、查询顺序、方法与 once 隔离'
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-http.mjs 导入的
  * 门面与库内部相对导入必须是同一实例，否则注入规则会静默分裂（exports 变动先红）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('../../lite-http.mjs');
   assert.equal(selfRef.default, liteHttp, '同一模块经不同 specifier 应共享同一实例');
@@ -195,7 +195,7 @@ test('包自引用 specifier 与相对导入共享同一单例', async () => {
 
 /** 场景：https 客户端面——未 mock 原样转发 node:https（拒连错误与 http 同形态），mock 后走
  * 同一内存传输且协议标记进入匹配 URL，注入规则对 https 请求同样命中；未命中按拒连不外联。 */
-test('https 面：未 mock 真实转发，mock 后同内存传输且注入命中', async () => {
+test('https 面：未 mock 真实转发，mock 后同内存传输且注入命中', async function test_https_面_未_mock_真实转发_mock_后同内存传输且注入命中() {
   // 输入 1：未 mock 对无人监听端口发起 httpsRequest，捕获拒连错误
   liteHttp.t_unmock();
   const refused = await new Promise(resolve => {
@@ -255,7 +255,7 @@ const f_send = (path = '/', options = {}) => {
 };
 
 /** 场景：客户端复位只清传输层故障，服务登记及响应阶段故障继续有效。 */
-test('客户端复位不清服务路由与服务端故障', async () => {
+test('客户端复位不清服务路由与服务端故障', async function test_客户端复位不清服务路由与服务端故障() {
   // 输入：两层故障同时生效后，只卸载并重建客户端。
   liteHttp.t_unmock(); liteServer.t_unmock();
   liteServer.t_mock(); liteHttp.t_mock();
@@ -275,7 +275,7 @@ test('客户端复位不清服务路由与服务端故障', async () => {
 });
 
 /** 场景：传输闸门命中后取消请求，once 已消耗且取消请求不会抵达 handler。 */
-test('传输闸门取消不投递且 once 不阻塞后续请求', async () => {
+test('传输闸门取消不投递且 once 不阻塞后续请求', async function test_传输闸门取消不投递且_once_不阻塞后续请求() {
   // 输入：请求命中一次性传输闸门后主动取消，再释放闸门并请求相同地址。
   liteHttp.t_unmock(); liteServer.t_unmock();
   liteHttp.t_mock(); liteServer.t_mock();
@@ -299,7 +299,7 @@ test('传输闸门取消不投递且 once 不阻塞后续请求', async () => {
 });
 
 /** 场景：客户端重建不改写已领取的故障，旧请求与新请求分别使用各自的配置。 */
-test('客户端重建后在途请求保留已命中故障', async () => {
+test('客户端重建后在途请求保留已命中故障', async function test_客户端重建后在途请求保留已命中故障() {
   // 输入：旧客户端已有请求等待故障闸门，重建后发送新请求，再放行旧请求。
   liteHttp.t_unmock(); liteServer.t_unmock();
   liteHttp.t_mock(); liteServer.t_mock();

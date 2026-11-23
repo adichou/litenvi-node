@@ -41,6 +41,8 @@
 
 `lite-child_process` 提供 `spawn/spawnSync`、`exec/execSync`、`execFile/execFileSync`。默认转发原生 Node；`t_mock()` 后全部经内存命令分派并统一记入 `t_calls()`，`t_reset()` 仅清账本。内存 `spawn` 支持 `options.timeout`：到期以 `killSignal`（缺省 `SIGTERM`）终止，`exit`/`close` 带信号、不发 `error` 事件，提前退出时撤销定时器（对齐原生）。
 
+同步命令钩子不能返回 Promise；误返回时立即报告 TypeError，后续 Promise 若拒绝，会记录原始错误，避免静默丢弃。
+
 `execFile(file, args?, options?, callback?)` 按字面 argv 执行，默认以 UTF-8 字符串回调 `(error, stdout, stderr)`；异步接口返回子进程，支持超时、AbortSignal、maxBuffer 和 `promisify`（Promise 上有 `child`，成功值为 `{ stdout, stderr }`）。同步接口默认返回 Buffer，非零退出或启动失败时抛出携带执行结果的错误。
 
 `exec(command, ...)` 使用内存 `/bin/sh -c`；exec 适配和 shell 实现均为 `lite-child_process.mjs` 的私有方法，解析复用 `shell-quote@1.12.0`（MIT）。当前支持普通引号、初始环境变量展开、`;`/`&&`/`||`、缓冲管道、`<`/`>`/`>>`、`1>&2`/`2>&1` 和局部 `cd`。命令替换、通配符、循环等完整 shell 语法尚未实现；mock 不启动真实 shell。Node 脚本的同步执行限制保持现状；`fork/IPC` 尚未提供。
@@ -88,6 +90,8 @@ ESLint 规则与配置直接使用官方 API 测试：单条规则使用 `RuleTe
 ## 验证
 
 运行 `npm test`。通用环境测试与项目的业务测试互补；内存 Git、工具链和浏览器组件模拟不代表真实网络、真实浏览器或平台验收。
+
+测试使用显式非空标题和内联具名回调，例如 `test('调用记录保持原始参数', function testOriginalArguments() { ... })`；回调名须在文件内可唯一定位，便于看板 code-ref 引用。`no-invalid-test-definition` 会检查匿名回调和重名歧义，套件与清理 hook 不受此命名要求。
 
 文档与实现的对齐由 AI 按语义校验，不由测试守护；测试守护模块行为口径（每个模块测试文件含包自引用单例检查）。示例代码块均可真实执行（需真实浏览器/外部服务的示例除外）：块内只用包自引用 specifier、自带归位。
 

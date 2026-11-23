@@ -31,7 +31,7 @@ function f_setup() {
 }
 
 /** 场景：显式安装——t_install() 后 OS 命令集全部命令在 mgr 注册表可寻址；绝对路径形态经前缀映射可执行。 */
-test('显式安装：OS 命令集全部在名单、cd/exit 内建在册、/usr/bin/open 前缀映射可执行', () => {
+test('显式安装：OS 命令集全部在名单、cd/exit 内建在册、/usr/bin/open 前缀映射可执行', function test_显式安装_OS_命令集全部在名单_cd_exit_内建在册_usr_bin_open_前缀映射可执行() {
   // 输入：t_install 安装命令集后读 mgr 注册表自省名单；spawnSync 绝对路径形态的 open
   t_install();
   const paths = mgr.t_defined();
@@ -57,7 +57,7 @@ test('显式安装：OS 命令集全部在名单、cd/exit 内建在册、/usr/b
 });
 
 /** 场景：open 桌面动作——内存世界一律成功，无输出。 */
-test('open：同步/异步面一律成功无输出', () => {
+test('open：同步/异步面一律成功无输出', function test_open_同步_异步面一律成功无输出() {
   const done = f_setup();
   try {
     // 输入：spawnSync /usr/bin/open 打开目录
@@ -72,7 +72,7 @@ test('open：同步/异步面一律成功无输出', () => {
 });
 
 /** 场景：ls 桥接 lite-fs——列内存卷目录，回命令行形态名单；缺失目录按失败收场。 */
-test('ls：内存卷目录回命令行名单、缺失目录失败', () => {
+test('ls：内存卷目录回命令行名单、缺失目录失败', function test_ls_内存卷目录回命令行名单_缺失目录失败() {
   const done = f_setup();
   try {
     // 输入：卷内建目录写入两个文件后 spawnSync ls
@@ -95,7 +95,7 @@ test('ls：内存卷目录回命令行名单、缺失目录失败', () => {
 });
 
 /** 场景：pwd/cwd 同源——回显 liteProcess.cwd()，假世界即虚拟当前目录、真实世界即 process.cwd()。 */
-test('pwd/cwd：与 liteProcess.cwd() 同源（假世界/真实世界各自口径）', () => {
+test('pwd/cwd：与 liteProcess.cwd() 同源（假世界/真实世界各自口径）', function test_pwd_cwd_与_liteProcess_cwd_同源_假世界_真实世界各自口径() {
   const done = f_setup();
   try {
     // 输入：安装虚拟当前目录后 spawnSync pwd
@@ -115,7 +115,7 @@ test('pwd/cwd：与 liteProcess.cwd() 同源（假世界/真实世界各自口�
 });
 
 /** 场景：mkdir/rm 常用形态——-p 递归幂等、无 -p 重名失败、-rf 删目录树、无 -r 删目录失败。 */
-test('mkdir/rm：-p 幂等、重名失败、-rf 删树、无 -r 删目录失败', () => {
+test('mkdir/rm：-p 幂等、重名失败、-rf 删树、无 -r 删目录失败', function test_mkdir_rm_p_幂等_重名失败_rf_删树_无_r_删目录失败() {
   const done = f_setup();
   try {
     // 输入：mkdir -p 深路径（两次验证幂等）
@@ -148,7 +148,7 @@ test('mkdir/rm：-p 幂等、重名失败、-rf 删树、无 -r 删目录失败'
 });
 
 /** 场景：cp/mv——单文件复制、递归复制子树、mv 改名且内容保留。 */
-test('cp/mv：单文件/递归子树/改名保内容', () => {
+test('cp/mv：单文件/递归子树/改名保内容', function test_cp_mv_单文件_递归子树_改名保内容() {
   const done = f_setup();
   try {
     // 输入：写入源文件后 cp 单文件
@@ -178,7 +178,7 @@ test('cp/mv：单文件/递归子树/改名保内容', () => {
 });
 
 /** 场景：cat/touch——多文件拼接输出、touch 建空文件、已存在文件 touch 不清空。 */
-test('cat/touch：多文件拼接、touch 建空文件与幂等不清空', () => {
+test('cat/touch：多文件拼接、touch 建空文件与幂等不清空', function test_cat_touch_多文件拼接_touch_建空文件与幂等不清空() {
   const done = f_setup();
   try {
     // 输入：写两个文件后 cat 拼接
@@ -207,7 +207,7 @@ test('cat/touch：多文件拼接、touch 建空文件与幂等不清空', () =>
 });
 
 /** 场景：test 命令——-f/-d/-e 退出码判定（0 成立 / 1 不成立），无输出。 */
-test('test：-f/-d/-e 退出码判定', () => {
+test('test：-f/-d/-e 退出码判定', function test_test_f_d_e_退出码判定() {
   const done = f_setup();
   try {
     // 输入：建文件与目录后逐条件 spawnSync test
@@ -233,7 +233,7 @@ test('test：-f/-d/-e 退出码判定', () => {
 });
 
 /** 场景：文件命令异步面——spawn 形式同样生效（stdout/退出码经子进程事件到达）。 */
-test('文件命令异步面：spawn cat 经子进程事件回内容与退出码', async () => {
+test('文件命令异步面：spawn cat 经子进程事件回内容与退出码', async function test_文件命令异步面_spawn_cat_经子进程事件回内容与退出码() {
   const done = f_setup();
   try {
     // 输入：写文件后以 spawn（异步面）执行 cat
@@ -252,7 +252,7 @@ test('文件命令异步面：spawn cat 经子进程事件回内容与退出码'
 });
 
 /** 场景：kill 命令信号形态——-<数字号位> 与 -s <SIGNAME> 寻址内存子进程。 */
-test('kill 信号形态：-9/-s SIGHUP 按 pid 发信号', async () => {
+test('kill 信号形态：-9/-s SIGHUP 按 pid 发信号', async function test_kill_信号形态_9_s_SIGHUP_按_pid_发信号() {
   const done = f_setup();
   try {
     // 输入：spawn 目标子进程，分别以 -9 与 -s SIGHUP 杀两个目标
@@ -277,7 +277,7 @@ test('kill 信号形态：-9/-s SIGHUP 按 pid 发信号', async () => {
 
 /** 场景：cd 命令（shell 内建）——沿用 chdir 校验：目录切换回写进程环境面、缺失目录失败、
  * 假世界外（liteProcess 未 mock）按失败收场（真实子进程改不了父进程 cwd）。 */
-test('cd 命令：切换回写 liteProcess.cwd、相对路径按当前 cwd 解析、缺失失败、假世界外失败', () => {
+test('cd 命令：切换回写 liteProcess.cwd、相对路径按当前 cwd 解析、缺失失败、假世界外失败', function test_cd_命令_切换回写_liteProcess_cwd_相对路径按当前_cwd_解析_缺失失败_假世界外失败() {
   const done = f_setup();
   try {
     // 输入：假世界（虚拟 cwd=/mock/project）下 spawnSync cd 切子目录
@@ -311,7 +311,7 @@ test('cd 命令：切换回写 liteProcess.cwd、相对路径按当前 cwd 解�
 
 /** 场景：exit 命令（shell 内建）——同步面记录退出意图并上抛 ProcessExitError；异步面按子进程
  * 以该码退出收场（spawn 派遣层转换，不外抛）。 */
-test('exit 命令：spawnSync 转子进程退出码、spawn 按码收场、退出意图入账', async () => {
+test('exit 命令：spawnSync 转子进程退出码、spawn 按码收场、退出意图入账', async function test_exit_命令_spawnSync_转子进程退出码_spawn_按码收场_退出意图入账() {
   const done = f_setup();
   try {
     liteProcess.t_mock({ cwd: '/mock/project' });
@@ -338,7 +338,7 @@ test('exit 命令：spawnSync 转子进程退出码、spawn 按码收场、退�
 
 
 /** 场景：kill 支持直接用信号名作为选项，实际信号与退出状态一致。 */
-test('kill 信号名选项：-TERM 投递 SIGTERM 并移除活动 PID', async () => {
+test('kill 信号名选项：-TERM 投递 SIGTERM 并移除活动 PID', async function test_kill_信号名选项_TERM_投递_SIGTERM_并移除活动_PID() {
   const done = f_setup();
   try {
     // 输入：启动活动命令，再通过公共 spawnSync 调用 kill -TERM
@@ -354,7 +354,7 @@ test('kill 信号名选项：-TERM 投递 SIGTERM 并移除活动 PID', async ()
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——命令集无独立门面实例，以测试协作面
  * t_commands 的函数身份验证（业务经 litenvi-node/lite-cmd-os.mjs 导入须与库内部相对导入一致）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('litenvi-node/lite-cmd-os.mjs');
   assert.equal(selfRef.t_commands(), t_commands(), '同一模块经不同 specifier 应共享同一实例');

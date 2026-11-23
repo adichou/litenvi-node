@@ -10,7 +10,7 @@ import fs from 'litenvi-node/lite-fs.mjs';
 const REAL_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 /** 场景：发布清单保留公开门面的子路径与 lint 前置检查。 */
-test('清单公开 lite 门面并在测试前执行 lint', () => {
+test('清单公开 lite 门面并在测试前执行 lint', function test_清单公开_lite_门面并在测试前执行_lint() {
   fs.t_mock({ exclude: [REAL_ROOT] });
   try {
     const manifest = JSON.parse(fs.readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'));

@@ -46,7 +46,7 @@ const REAL_ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.ur
 const ROOT = '/data/lite-fs-root'; // 内存卷路径（真实磁盘不存在的绝对路径）
 
 /** 场景：黑名单边界——排除目录内走真实 fs，排除外落内存卷，两侧互不串扰。 */
-test('排除目录系统本体：mock 后读源码文件原样走真实 fs、不经内存卷', () => {
+test('排除目录系统本体：mock 后读源码文件原样走真实 fs、不经内存卷', function test_排除目录系统本体_mock_后读源码文件原样走真实_fs_不经内存卷() {
   // 输入：mock 黑名单（排除本测试目录）后读排除目录内的源码文件、查卷内路径
   liteFs.t_mock({ exclude: [EXCLUDED] });
   try {
@@ -62,7 +62,7 @@ test('排除目录系统本体：mock 后读源码文件原样走真实 fs、不
 });
 
 /** 场景：目录项类型与排除目录复制行为在内存卷与真实文件系统间一致。 */
-test('目录项类型和从排除目录复制到内存卷与真实文件系统一致', () => {
+test('目录项类型和从排除目录复制到内存卷与真实文件系统一致', function test_目录项类型和从排除目录复制到内存卷与真实文件系统一致() {
   // 输入：构造混合类型目录项并从排除目录复制入卷。
   const actualDirectory = realFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-copy-isolation-'));
   realFs.mkdirSync(path.join(actualDirectory, 'dir'));
@@ -95,7 +95,7 @@ test('目录项类型和从排除目录复制到内存卷与真实文件系统�
 });
 
 /** 场景：相同文件操作分别交给真实 fs 与内存卷，核对返回值、错误字段、字节与文件状态。 */
-test('真实 FS 对照：读写、目录、fd、读流与错误字段', async () => {
+test('真实 FS 对照：读写、目录、fd、读流与错误字段', async function test_真实_FS_对照_读写_目录_fd_读流与错误字段() {
   const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-fs-reference-'));
   const root = realFs.realpathSync(temporary);
   const scenario = async (fs, directory) => {
@@ -154,7 +154,7 @@ test('真实 FS 对照：读写、目录、fd、读流与错误字段', async ()
 });
 
 /** 场景：默认真实实现——未 mock 时门面全量转发真实 node:fs。 */
-test('默认真实实现：未 mock 时读系统本体文件与 node:fs 完全一致', () => {
+test('默认真实实现：未 mock 时读系统本体文件与 node:fs 完全一致', function test_默认真实实现_未_mock_时读系统本体文件与_node_fs_完全一致() {
   // 输入：未 mock 状态下对系统本体文件做存在性检查与读取
   // 预期 1：真实文件 existsSync 可见
   assert.equal(liteFs.existsSync(selfFile), true, '真实文件应可见');
@@ -163,7 +163,7 @@ test('默认真实实现：未 mock 时读系统本体文件与 node:fs 完全�
 });
 
 /** 场景：目录、链接与访问操作的成功/失败结果与真实 fs 一致，不读取内存实现。 */
-test('真实 FS 对照：目录改名与删除、访问失败、符号链接和读流', async () => {
+test('真实 FS 对照：目录改名与删除、访问失败、符号链接和读流', async function test_真实_FS_对照_目录改名与删除_访问失败_符号链接和读流() {
   const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-fs-extra-'));
   const scenario = async (fileSystem, root) => {
     const observed = [];
@@ -213,7 +213,7 @@ test('真实 FS 对照：目录改名与删除、访问失败、符号链接和�
 });
 
 /** 场景：符号链接读取的字节、编码和错误结果与原生 fs 一致。 */
-test('真实 FS 对照：符号链接读取支持相对路径、链式链接、目录链接与循环报错', () => {
+test('真实 FS 对照：符号链接读取支持相对路径、链式链接、目录链接与循环报错', function test_真实_FS_对照_符号链接读取支持相对路径_链式链接_目录链接与循环报错() {
   const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-fs-symlink-'));
   const scenario = (fileSystem, root) => {
     fileSystem.mkdirSync(root + '/folder');
@@ -251,7 +251,7 @@ test('真实 FS 对照：符号链接读取支持相对路径、链式链接、�
  * https://nodejs.org/api/fs.html#fsrmsyncpath-options）——recursive 返回首个新建目录、
  * 非递归 EEXIST、rename 覆盖既有目标的 EISDIR/ENOTDIR/ENOTEMPTY、append 对缺失路径建文件、
  * rm 的 ERR_FS_EISDIR/force 静默。 */
-test('真实 FS 对照：mkdir 返回值、rename 覆盖口径、append 建文件与 rm 边缘', () => {
+test('真实 FS 对照：mkdir 返回值、rename 覆盖口径、append 建文件与 rm 边缘', function test_真实_FS_对照_mkdir_返回值_rename_覆盖口径_append_建文件与_rm_边缘() {
   const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-fs-doc-mkdir-'));
   const scenario = (fileSystem, root) => {
     const observed = [];
@@ -320,7 +320,7 @@ test('真实 FS 对照：mkdir 返回值、rename 覆盖口径、append 建文�
  * https://nodejs.org/api/fs.html#fscopyfilesyncsrc-dest-mode）——statSync 跟随符号链接
  * （size 为目标内容长、中段目录链接可穿）、lstat 保留链接条目且 size 为目标字符串字节长、
  * utimes 回写 mtimeMs、EXCL 复制 EEXIST。 */
-test('真实 FS 对照：stat 跟随链接、lstat 链接条目、utimes 回写与 EXCL 复制', () => {
+test('真实 FS 对照：stat 跟随链接、lstat 链接条目、utimes 回写与 EXCL 复制', function test_真实_FS_对照_stat_跟随链接_lstat_链接条目_utimes_回写与_EXCL_复制() {
   const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-fs-doc-stat-'));
   const scenario = (fileSystem, root) => {
     const observed = [];
@@ -384,7 +384,7 @@ test('真实 FS 对照：stat 跟随链接、lstat 链接条目、utimes 回写�
  * https://nodejs.org/api/fs.html#fsclosesyncfd）——显式 position 定位读、EOF 返回 0、
  * 关闭后读写 EBADF、wx 排他创建 EEXIST。（lite fd 不维护游标为头注释声明的偏差口径，
  * 缺省 position 不纳入对照。） */
-test('真实 FS 对照：fd 定位读、EOF、关闭后 EBADF 与 wx 排他创建', () => {
+test('真实 FS 对照：fd 定位读、EOF、关闭后 EBADF 与 wx 排他创建', function test_真实_FS_对照_fd_定位读_EOF_关闭后_EBADF_与_wx_排他创建() {
   const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-fs-doc-fd-'));
   const scenario = (fileSystem, root) => {
     const observed = [];
@@ -436,7 +436,7 @@ function f_setupExecReference() {
 }
 
 /** 场景：同一组操作分别运行原生 Node 与内存实现，对比参数错误、输入回包和暂停恢复。 */
-test('真实 child_process 对照：参数校验、输入流、暂停恢复与退出状态', async () => {
+test('真实 child_process 对照：参数校验、输入流、暂停恢复与退出状态', async function test_真实_child_process_对照_参数校验_输入流_暂停恢复与退出状态() {
   // 输入：真实临时目录内准备输入文件，记录原生接口在各场景的完整错误和结果形状
   const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-child-parity-'));
   const root = nativeFs.realpathSync(temporary);
@@ -533,7 +533,7 @@ test('真实 child_process 对照：参数校验、输入流、暂停恢复与�
 });
 
 /** 场景：独立测试进程观察 ref/unref 是否真正影响退出时机，而非只比较方法返回值。 */
-test('真实 child_process 对照：ref/unref 控制运行引用，unmock 释放引用', () => {
+test('真实 child_process 对照：ref/unref 控制运行引用，unmock 释放引用', function test_真实_child_process_对照_ref_unref_控制运行引用_unmock_释放引用() {
   const childUrl = new URL('../../lite-child_process.mjs', import.meta.url).href;
   const fsUrl = new URL('../../lite-fs.mjs', import.meta.url).href;
   const mgrUrl = new URL('../../lite-cmd-mgr.mjs', import.meta.url).href;
@@ -581,7 +581,7 @@ test('真实 child_process 对照：ref/unref 控制运行引用，unmock 释放
 });
 
 /** 场景：同步边界与真实 Node 对照——编码、stdio、启动失败及结果对象字段一致。 */
-test('真实 Node 对照：spawnSync 编码、stdio、ENOENT 与 ENOTDIR', () => {
+test('真实 Node 对照：spawnSync 编码、stdio、ENOENT 与 ENOTDIR', function test_真实_Node_对照_spawnSync_编码_stdio_ENOENT_与_ENOTDIR() {
   // 输入：真实临时目录内建立一个普通文件，分别执行成功、缺失命令和无效 cwd 场景
   const root = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-child-reference-'));
   const file = path.join(root, 'file');
@@ -620,7 +620,7 @@ test('真实 Node 对照：spawnSync 编码、stdio、ENOENT 与 ENOTDIR', () =>
 });
 
 /** 场景：异步启动失败与真实 Node 对照——spawn 返回子进程，随后触发 error、close，无 exit。 */
-test('真实 Node 对照：spawn 缺失命令的错误字段与事件顺序', async () => {
+test('真实 Node 对照：spawn 缺失命令的错误字段与事件顺序', async function test_真实_Node_对照_spawn_缺失命令的错误字段与事件顺序() {
   const observe = child => new Promise(resolve => {
     const events = [];
     let error;
@@ -649,7 +649,7 @@ test('真实 Node 对照：spawn 缺失命令的错误字段与事件顺序', as
 });
 
 /** 场景：命令与参数校验、options 重载和 null args 的行为与真实 Node 对照。 */
-test('真实 Node 对照：参数校验与 options 重载', () => {
+test('真实 Node 对照：参数校验与 options 重载', function test_真实_Node_对照_参数校验与_options_重载() {
   // 输入：无效命令、无效参数、null options，以及合法的 options 重载与 null args
   const invalid = [[1], [''], ['x\0'], ['echo', 'bad'], ['echo', [], null]];
   const codes = invalid.map(args => {
@@ -673,7 +673,7 @@ test('真实 Node 对照：参数校验与 options 重载', () => {
 });
 
 /** 场景：真实 Node 与内存子进程均支持信号 0、数值信号及非法信号校验。 */
-test('真实 Node 对照：信号探测、SIGKILL、退出状态与 ref/unref', async () => {
+test('真实 Node 对照：信号探测、SIGKILL、退出状态与 ref/unref', async function test_真实_Node_对照_信号探测_SIGKILL_退出状态与_ref_unref() {
   const observe = child => new Promise(resolve => {
     child.on('spawn', () => {
       const refs = [child.ref(), child.unref()];
@@ -701,7 +701,7 @@ test('真实 Node 对照：信号探测、SIGKILL、退出状态与 ref/unref', 
 });
 
 /** 场景：默认真实实现——未 mock 时 spawn 真实子进程。 */
-test('默认真实实现：未 mock 时 spawn 真实 node 空脚本退出码 0', async () => {
+test('默认真实实现：未 mock 时 spawn 真实 node 空脚本退出码 0', async function test_默认真实实现_未_mock_时_spawn_真实_node_空脚本退出码_0() {
   // 输入：未 mock 状态下 spawn 真实 node 执行空脚本，经门面 waitForClose 等终态
   const child = liteChildProcess.spawn(process.execPath, ['-e', '']);
   const { code } = await liteChildProcess.waitForClose(child);
@@ -710,7 +710,7 @@ test('默认真实实现：未 mock 时 spawn 真实 node 空脚本退出码 0',
 });
 
 /** 场景：恢复默认——unmock 后 spawn 与 spawnSync 都回到真实实现。 */
-test('恢复默认：unmock 后 spawn/spawnSync 回真实子进程语义', async () => {
+test('恢复默认：unmock 后 spawn/spawnSync 回真实子进程语义', async function test_恢复默认_unmock_后_spawn_spawnSync_回真实子进程语义() {
   // 输入：mock 后立即 unmock，再 spawn 真实 node 空脚本
   liteChildProcess.t_mock();
   liteChildProcess.t_unmock();
@@ -739,7 +739,7 @@ function f_execErrorShape(error, root, sync = false) {
 }
 
 /** 场景：execFile 的 argv 保持字面值，exec 经 shell 解释命令文本，同步/异步响应对齐原生。 */
-test('真实 exec 对照：参数、编码、shell、输入、失败回包与 Promise', async () => {
+test('真实 exec 对照：参数、编码、shell、输入、失败回包与 Promise', async function test_真实_exec_对照_参数_编码_shell_输入_失败回包与_Promise() {
   const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-exec-reference-'));
   const realRoot = nativeFs.realpathSync(temporary);
   nativeFs.mkdirSync(realRoot + '/sub'); nativeFs.writeFileSync(realRoot + '/input.txt', 'input\n');
@@ -804,7 +804,7 @@ test('真实 exec 对照：参数、编码、shell、输入、失败回包与 Pr
 });
 
 /** 场景：超时与 AbortSignal 终止异步执行，错误字段和回调次数对齐原生。 */
-test('真实 execFile 对照：超时、取消和回调仅一次', async () => {
+test('真实 execFile 对照：超时、取消和回调仅一次', async function test_真实_execFile_对照_超时_取消和回调仅一次() {
   // 输入：经 lite 门面与原生 child_process 分别执行带超时与取消的 execFile。
   const scenario = async memory => {
     const results = [];
@@ -836,7 +836,7 @@ test('真实 execFile 对照：超时、取消和回调仅一次', async () => {
 });
 
 /** 场景：可选 args/options/callback 重载及非法参数，按原生接口在执行前校验。 */
-test('真实 exec 对照：可选参数重载与非法参数', async () => {
+test('真实 exec 对照：可选参数重载与非法参数', async function test_真实_exec_对照_可选参数重载与非法参数() {
   // 输入：exec 各参数重载与非法参数经 lite 门面与原生对照执行。
   const scenario = async () => {
     const output = [];
@@ -867,7 +867,7 @@ test('真实 exec 对照：可选参数重载与非法参数', async () => {
  * https://nodejs.org/api/child_process.html#child_processspawncommand-args-options）——
  * 超时到期以 killSignal 终止（exit/close 带信号、无 error 事件、killed 置位、提前退出撤销
  * 定时器），stdio 'ignore' 公开流为 null。 */
-test('真实 Node 对照：spawn 超时 killSignal 终止与 stdio ignore', async () => {
+test('真实 Node 对照：spawn 超时 killSignal 终止与 stdio ignore', async function test_真实_Node_对照_spawn_超时_killSignal_终止与_stdio_ignore() {
   const scenario = async backend => {
     const events = [];
     // 输入：常驻子进程 + 20ms 超时 + SIGKILL，观察事件序与 killed 标记
@@ -900,7 +900,7 @@ test('真实 Node 对照：spawn 超时 killSignal 终止与 stdio ignore', asyn
 // ---------- lite-cmd-node：真实 Node 对照（自 lite-cmd-node.test.mjs 迁入） ----------
 
 /** 场景：原生对照隔离调试器预加载和强制颜色，业务环境变量与脚本自身 stderr 保持可见。 */
-test('原生对照环境：调试器与颜色设置不污染输出，业务 stderr 保留', () => {
+test('原生对照环境：调试器与颜色设置不污染输出，业务 stderr 保留', function test_原生对照环境_调试器与颜色设置不污染输出_业务_stderr_保留() {
   const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-reference-env-'));
   const preload = path.join(temporary, 'debug-preload.cjs');
   const marker = path.join(temporary, 'preloaded');
@@ -932,7 +932,7 @@ test('原生对照环境：调试器与颜色设置不污染输出，业务 stde
 });
 
 /** 场景：同一组 Node 命令分别由真实 Node 与内存实现执行，核对输出、参数、环境与退出。 */
-test('真实 Node 对照：版本、脚本输出、argv/env、模块加载与退出码', async () => {
+test('真实 Node 对照：版本、脚本输出、argv/env、模块加载与退出码', async function test_真实_Node_对照_版本_脚本输出_argv_env_模块加载与退出码() {
   // 输入：真实临时目录内准备入口、相对依赖、顶层 await 与错误脚本
   const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-node-reference-'));
   const root = realFs.realpathSync(temporary);
@@ -1024,7 +1024,7 @@ test('真实 Node 对照：版本、脚本输出、argv/env、模块加载与退
  * https://nodejs.org/api/cli.html#-print-script）——stdin 代码经 EOF 后执行并按结果退出，
  * -p 的对象打印走 util.inspect 同源格式。（node 同步面仅支持 -v 为头注释声明的偏差口径，
  * 不纳入对照。） */
-test('真实 Node 对照：stdin 脚本执行与 -p 求值打印', async () => {
+test('真实 Node 对照：stdin 脚本执行与 -p 求值打印', async function test_真实_Node_对照_stdin_脚本执行与_p_求值打印() {
   const scenario = async memory => {
     const responses = [];
     const options = { env: i_nativeReferenceEnv(), encoding: 'utf8' };
@@ -1080,7 +1080,7 @@ function f_writeFixture(code) {
 }
 
 /** 场景：覆盖率范围旗标把统计限定在指定 glob 内——范围外真实模块不计入覆盖率表，等号与空格取值均可。 */
-test('node --test 覆盖率范围：include/exclude glob 生效', async () => {
+test('node --test 覆盖率范围：include/exclude glob 生效', async function test_node_test_覆盖率范围_include_exclude_glob_生效() {
   const foreignDir = realFs.mkdtempSync(path.join(os.tmpdir(), 'lite-cov-foreign-'));
   const foreign = path.join(foreignDir, 'foreign.mjs');
   realFs.writeFileSync(foreign, 'export const v = 1;\n');
@@ -1118,7 +1118,7 @@ test('node --test 覆盖率范围：include/exclude glob 生效', async () => {
 });
 
 /** 场景：普通 import 在宿主中加载源码，入口可重复执行，并发命令各自使用参数与输出管道。 */
-test('普通 import：共享宿主全局、重复入口执行、并发输出与宿主环境恢复', async () => {
+test('普通 import：共享宿主全局、重复入口执行、并发输出与宿主环境恢复', async function test_普通_import_共享宿主全局_重复入口执行_并发输出与宿主环境恢复() {
   const marker = Symbol.for('litenvi-node-native-import');
   globalThis[marker] = { count: 0 };
   const original = { argv: process.argv, env: process.env, cwd: process.cwd(), exitCode: process.exitCode,
@@ -1167,7 +1167,7 @@ test('普通 import：共享宿主全局、重复入口执行、并发输出与�
 
 /** 场景：虚拟 Node 命令运行期间不替换原生 fs，CJS、ESM 默认和具名导入保持同一原生接口。
  * 夹具只观测原生接口身份，不通过原生 fs 读写业务文件；stdin 闸门保持命令运行以检查中间状态。 */
-test('显式文件边界：运行中原生 fs 保持不变', { timeout: 5000 }, async () => {
+test('显式文件边界：运行中原生 fs 保持不变', { timeout: 5000 }, async function test_显式文件边界_运行中原生_fs_保持不变() {
   liteChildProcess.t_unmock();
   liteFs.t_unmock();
   const original = { read: realFs.readFileSync, write: realFs.writeFileSync, exists: realFs.existsSync };
@@ -1228,7 +1228,7 @@ test('显式文件边界：运行中原生 fs 保持不变', { timeout: 5000 }, 
 });
 
 /** 场景：终止持有监听服务的脚本时，服务资源也随命令释放。 */
-test('活动服务清理：终止 Node 后关闭其监听端口', async () => {
+test('活动服务清理：终止 Node 后关闭其监听端口', async function test_活动服务清理_终止_Node_后关闭其监听端口() {
   const done = f_setup();
   liteServer.t_mock();
   const serverUrl = new URL('../../lite-server.mjs', import.meta.url).href;
@@ -1265,7 +1265,7 @@ function f_setupOs() {
 }
 
 /** 场景：在真实目录和内存卷重放文件命令，对比同步/异步输出、退出码与目录内容。 */
-test('真实 OS 对照：文件命令、相对路径、错误输出与同步/异步退出码', async () => {
+test('真实 OS 对照：文件命令、相对路径、错误输出与同步/异步退出码', async function test_真实_OS_对照_文件命令_相对路径_错误输出与同步_异步退出码() {
   // 输入：隔离真实临时目录，固定 C 语言环境与非终端输出；每轮使用全新工作目录
   const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-os-reference-'));
   const realRoot = nativeFs.realpathSync(temporary);
@@ -1367,7 +1367,7 @@ test('真实 OS 对照：文件命令、相对路径、错误输出与同步/异
 });
 
 /** 场景：只向本用例启动的进程发信号，退出码借原生 shell 内建 exit 作对照。 */
-test('真实 OS 对照：kill 探测、信号终止、失效 PID 与 exit 退出码', async () => {
+test('真实 OS 对照：kill 探测、信号终止、失效 PID 与 exit 退出码', async function test_真实_OS_对照_kill_探测_信号终止_失效_PID_与_exit_退出码() {
   const env = i_nativeReferenceEnv();
   const scenario = async (memory, asynchronous) => {
     const responses = [];
@@ -1440,7 +1440,7 @@ function f_setupGit() {
 }
 
 /** 场景：合并提交的 log 和 diff-tree 文件清单与真实 Git 一致。 */
-test('真实 Git 对照：合并提交默认不输出变更路径', () => {
+test('真实 Git 对照：合并提交默认不输出变更路径', function test_真实_Git_对照_合并提交默认不输出变更路径() {
   // 输入：内存卷与真实仓库各构造一次合并提交并读取输出。
   const temp = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-git-merge-reference-'));
   const root = nativeFs.realpathSync(temp);
@@ -1470,7 +1470,7 @@ test('真实 Git 对照：合并提交默认不输出变更路径', () => {
 });
 
 /** 场景：真实 Git 与内存 Git 对照删除、路径不匹配和限定提交的返回值及仓库状态。 */
-test('真实 Git 对照：暂存删除、无匹配 add 与限定提交', () => {
+test('真实 Git 对照：暂存删除、无匹配 add 与限定提交', function test_真实_Git_对照_暂存删除_无匹配_add_与限定提交() {
   // 输入：内存卷与真实仓库依次执行暂存删除、空匹配 add 与限定提交。
   const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-git-rm-reference-'));
   const realRoot = nativeFs.realpathSync(temporary);
@@ -1527,7 +1527,7 @@ test('真实 Git 对照：暂存删除、无匹配 add 与限定提交', () => {
 });
 
 /** 场景：同一组操作分别交给真实 Git 与内存 Git，对比返回字段与工作树效果。 */
-test('真实 Git 对照：错误输出、分支切换、引用、写命令与退出码', () => {
+test('真实 Git 对照：错误输出、分支切换、引用、写命令与退出码', function test_真实_Git_对照_错误输出_分支切换_引用_写命令与退出码() {
   // 输入：隔离作者配置、签名与 hooks，在真实临时仓库重放同一组命令
   const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-git-reference-'));
   const realRoot = nativeFs.realpathSync(temporary);
@@ -1640,7 +1640,7 @@ test('真实 Git 对照：错误输出、分支切换、引用、写命令与退
 });
 
 /** 场景：中文、重音字符与其他 Unicode 引用可创建、切换、解析和枚举，排序与真实 Git 一致。 */
-test('真实 Git 对照：Unicode 分支与标签名称及引用排序', () => {
+test('真实 Git 对照：Unicode 分支与标签名称及引用排序', function test_真实_Git_对照_Unicode_分支与标签名称及引用排序() {
   // 输入：中文初始分支、中文文件与提交说明，混合大小写、重音、分层名称、私用字符和 emoji 引用
   const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-unicode-refs-'));
   const realRoot = nativeFs.realpathSync(temporary);
@@ -1696,7 +1696,7 @@ test('真实 Git 对照：Unicode 分支与标签名称及引用排序', () => {
 });
 
 /** 场景：放行 Unicode 引用后，Git 禁止的路径组件、控制字符和特殊序列仍被拒绝且不产生引用。 */
-test('真实 Git 对照：非法分支与标签名称仍拒绝', () => {
+test('真实 Git 对照：非法分支与标签名称仍拒绝', function test_真实_Git_对照_非法分支与标签名称仍拒绝() {
   // 输入：空名、空白、点路径、锁文件组件、非法分隔符、修订表达式符号与控制字符
   const names = ['', 'bad name', 'a..b', '.hidden', 'a/.hidden', 'a.lock', 'a.lock/b', '/leading',
     'trailing/', 'double//slash', 'end.', 'a@{b', 'a~b', 'a^b', 'a:b', 'a?b', 'a*b', 'a[b', 'a\\b', 'a\u0001b', 'a\u007fb'];
@@ -1737,7 +1737,7 @@ test('真实 Git 对照：非法分支与标签名称仍拒绝', () => {
 });
 
 /** 场景：真实 Git 与内存 Git 重放祖先引用、路径恢复、混合重置、分离 HEAD 与快进合并。 */
-test('真实 Git 对照：祖先引用、路径恢复、分离 HEAD 与快进合并', () => {
+test('真实 Git 对照：祖先引用、路径恢复、分离 HEAD 与快进合并', function test_真实_Git_对照_祖先引用_路径恢复_分离_HEAD_与快进合并() {
   const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'lite-git-extra-'));
   const realRoot = nativeFs.realpathSync(temporary);
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
@@ -1803,7 +1803,7 @@ test('真实 Git 对照：祖先引用、路径恢复、分离 HEAD 与快进合
  * rev:path；ls-files/ls-tree/diff-tree 清单；diff --quiet/--cached --quiet 退出码；
  * check-ignore 判定与 fetch 失败块。提交时间与提交号两侧各自生成，按占位符归一（%at 在
  * 头注释声明的占位符集之外，不纳入对照）。 */
-test('真实 Git 对照：log 格式引擎、只读引用族与忽略模型', () => {
+test('真实 Git 对照：log 格式引擎、只读引用族与忽略模型', function test_真实_Git_对照_log_格式引擎_只读引用族与忽略模型() {
   const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'lite-git-readonly-'));
   const realRoot = nativeFs.realpathSync(temporary);
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
@@ -1897,7 +1897,7 @@ test('真实 Git 对照：log 格式引擎、只读引用族与忽略模型', ()
  * stdout 的 Auto-merging/CONFLICT (content)/Automatic merge failed 提示；解决冲突后提交成功、
  * 工作树恢复干净。冲突状态模型（解决前二次合并的 128、合并提交的双父历史、文件冲突标记与
  * porcelain UU）为头注释声明范围之外，不纳入对照。 */
-test('真实 Git 对照：合并冲突回包与解决后恢复', () => {
+test('真实 Git 对照：合并冲突回包与解决后恢复', function test_真实_Git_对照_合并冲突回包与解决后恢复() {
   const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'lite-git-conflict-'));
   const realRoot = nativeFs.realpathSync(temporary);
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
@@ -1950,7 +1950,7 @@ test('真实 Git 对照：合并冲突回包与解决后恢复', () => {
 /** 场景：diff --no-index 与真实 git 逐字节对照（同一对真实文件、同一旗标）——输出格式
  * 忠实度由真实 /usr/bin/git 锚定（头路径去前导斜杠、index 7 位 blob 缩写、@@ 形态、
  * 无尾换行注记），退出码形态一致（差异 1 / 相同 0）。 */
-test('diff --no-index：与真实 git 输出逐字节一致', async () => {
+test('diff --no-index：与真实 git 输出逐字节一致', async function test_diff_no_index_与真实_git_输出逐字节一致() {
   const { spawnSync: realSpawnSync } = await import('node:child_process');
   const cleanup = f_setupGit();
   try {
@@ -2001,7 +2001,7 @@ function f_setupGitLock() {
 }
 
 /** 场景：真实 Git 与内存 Git 在已有索引锁时读取和写入的行为一致。 */
-test('真实 Git 对照：索引锁阻止写入但不阻止状态读取', () => {
+test('真实 Git 对照：索引锁阻止写入但不阻止状态读取', function test_真实_Git_对照_索引锁阻止写入但不阻止状态读取() {
   // 输入：预置 index.lock 后交替执行写入与状态读取。
   const temp = nativeFs.realpathSync(nativeFs.mkdtempSync(path.join(os.tmpdir(), 'lite-git-index-lock-')));
   function scenario(root, filesystem, execute) {
@@ -2052,7 +2052,7 @@ function f_setupProcess(worldOptions = {}) {
 }
 
 /** 场景：真实 process 与虚拟 process 重放目录、环境及信号操作，退出由原生 Node 结果作参照。 */
-test('真实 Process 对照：cwd/chdir、argv/env、字段、信号与退出码', async () => {
+test('真实 Process 对照：cwd/chdir、argv/env、字段、信号与退出码', async function test_真实_Process_对照_cwd_chdir_argv_env_字段_信号与退出码() {
   const temporary = realFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-process-reference-'));
   const root = realFs.realpathSync(temporary), originalCwd = process.cwd(), originalArgv = process.argv;
   const originalEnv = process.env.LITE_PROCESS_REFERENCE;
@@ -2124,7 +2124,7 @@ test('真实 Process 对照：cwd/chdir、argv/env、字段、信号与退出码
  * 触发/未知句柄均为 no-op）。原生侧用 globalThis 定时器跑同一场景脚本，虚拟侧以 advanceMs
  * 等效推进（冻结世界为头注释声明的口径差异，只比事件日志）。句柄形态（原生 Timeout 对象 vs
  * 虚拟句柄对象）亦为声明偏差，仅断言可选消费安全。 */
-test('真实 Node 对照：同延迟 FIFO、setInterval 额外实参与 clear 幂等', async () => {
+test('真实 Node 对照：同延迟 FIFO、setInterval 额外实参与 clear 幂等', async function test_真实_Node_对照_同延迟_FIFO_setInterval_额外实参与_clear_幂等() {
   // 输入：同延迟定时器与 interval 各形态经内存卷与真实 node 执行对比。
   const scenario = (world) => {
     const log = [];
@@ -2258,7 +2258,7 @@ function f_destroySnapshot(client, port) {
 }
 
 /** 场景：相同 HTTP 请求分别由原生与内存客户端执行，核对请求/响应、字节和事件。 */
-test('真实 HTTP 对照：request/get、URL 重载、请求头、二进制正文与取消事件', async () => {
+test('真实 HTTP 对照：request/get、URL 重载、请求头、二进制正文与取消事件', async function test_真实_HTTP_对照_request_get_URL_重载_请求头_二进制正文与取消事件() {
   const scenario = async memory => {
     if (memory) { liteHttp.t_mock(); liteServer.t_mock(); }
     const server = (memory ? liteServer : http).createServer(f_referenceHandler);
@@ -2290,7 +2290,7 @@ test('真实 HTTP 对照：request/get、URL 重载、请求头、二进制正�
 });
 
 /** 场景：默认真实实现——未 mock 时走真实 node:http 的 connect 语义。 */
-test('默认真实实现：未 mock 时无人监听端口按真实 ECONNREFUSED 拒连', async () => {
+test('默认真实实现：未 mock 时无人监听端口按真实 ECONNREFUSED 拒连', async function test_默认真实实现_未_mock_时无人监听端口按真实_ECONNREFUSED_拒连() {
   // 输入：未 mock 状态下探活无人监听的 1 号端口
   const refused = await f_probe(1);
   // 预期 1：探活失败
@@ -2306,7 +2306,7 @@ test('默认真实实现：未 mock 时无人监听端口按真实 ECONNREFUSED 
  * address/port 与消息，端口数字归一）、响应头全量键小写（文档：headers 所有键为小写）、
  * statusMessage 取状态表。响应头键集合两侧不逐项比（原生含 date/keep-alive 等连接面，
  * 卷内为内存回包形态）。 */
-test('真实 HTTP 对照：拒连错误字段、statusMessage 与响应头小写键', async () => {
+test('真实 HTTP 对照：拒连错误字段、statusMessage 与响应头小写键', async function test_真实_HTTP_对照_拒连错误字段_statusMessage_与响应头小写键() {
   const scenario = async (memory, refusedPort) => {
     if (memory) { liteHttp.t_mock(); liteServer.t_mock(); }
     const client = memory ? liteHttp : http;
@@ -2350,7 +2350,7 @@ test('真实 HTTP 对照：拒连错误字段、statusMessage 与响应头小写
 // ---------- lite-server：真实 Server 对照（自 lite-server.test.mjs 迁入） ----------
 
 /** 场景：原生客户端访问相同 handler，核对原生与内存服务的响应及监听/关闭生命周期。 */
-test('真实 Server 对照：监听地址、回调、响应头、字节与关闭事件', async () => {
+test('真实 Server 对照：监听地址、回调、响应头、字节与关闭事件', async function test_真实_Server_对照_监听地址_回调_响应头_字节与关闭事件() {
   const scenario = async memory => {
     if (memory) { liteHttp.t_mock(); liteServer.t_mock(); }
     const events = [];
@@ -2388,7 +2388,7 @@ test('真实 Server 对照：监听地址、回调、响应头、字节与关闭
  * 服务按声明回 500 JSON { error: message }——同步抛错经 f_handle 的 Promise executor 转
  * 拒绝、异步 handler 拒绝经 Promise.resolve(handled).catch，两条路径同口径（真回环 socket
  * 与进程内直调各验一次）。 */
-test('真实 Server 对照：未运行 close 回调错误一致；handler 抛错按声明回 500 JSON', async () => {
+test('真实 Server 对照：未运行 close 回调错误一致；handler 抛错按声明回 500 JSON', async function test_真实_Server_对照_未运行_close_回调错误一致_handler_抛错按声明回_500_JSON() {
   const scenario = async memory => {
     if (memory) { liteHttp.t_mock(); liteServer.t_mock(); }
     const factory = memory ? liteServer : http;
@@ -2543,7 +2543,7 @@ const f_freePort = () => new Promise((resolve, reject) => {
 });
 
 /** 场景：多个服务实例按域名与端口隔离路由，单实例关闭不影响其余。 */
-test('多个服务按域名和端口独立路由，关闭互不影响', async () => {
+test('多个服务按域名和端口独立路由，关闭互不影响', async function test_多个服务按域名和端口独立路由_关闭互不影响() {
   // 输入：起多个不同域名/端口的服务，逐个关闭并发请求。
   liteHttp.t_mock();
   liteServer.t_mock();
@@ -2566,7 +2566,7 @@ test('多个服务按域名和端口独立路由，关闭互不影响', async ()
 });
 
 /** 场景：回环服务与同端口虚拟服务按域名隔离，互不串扰。 */
-test('两个回环服务及同端口不同域名的虚拟服务彼此隔离', async () => {
+test('两个回环服务及同端口不同域名的虚拟服务彼此隔离', async function test_两个回环服务及同端口不同域名的虚拟服务彼此隔离() {
   // 输入：回环服务与同端口双域名虚拟服务并行注册并交替请求。
   liteHttp.t_mock(); liteServer.t_mock();
   const first = liteServer.createServer((_req, res) => res.end('first')).listen(0);
@@ -2591,7 +2591,7 @@ test('两个回环服务及同端口不同域名的虚拟服务彼此隔离', as
 });
 
 /** 场景：真实 socket 回灌管线与观测账本——真 TCP 流量回包来自真实 handler，账本按契约记录。 */
-test('socket 前端：真 TCP GET/POST 回灌管线、账本契约、缓存头区分', async () => {
+test('socket 前端：真 TCP GET/POST 回灌管线、账本契约、缓存头区分', async function test_socket_前端_真_TCP_GET_POST_回灌管线_账本契约_缓存头区分() {
   // 输入：真 socket 客户端 GET API / GET 静态 / POST API，随后读账本并 resetRequests
   const out = await f_withBoard(f_boardHandler, async (port) => {
     const api = await f_realGet(port, '/api/echo?a=1');
@@ -2639,7 +2639,7 @@ test('socket 前端：真 TCP GET/POST 回灌管线、账本契约、缓存头�
 });
 
 /** 场景：故障对 socket 流量生效——传输层 503 与服务端 wait 闸门对真 TCP 客户端同样生效。 */
-test('socket 故障：传输层 503/服务端闸门对真 socket 生效、账本 serverResponse 区分', async () => {
+test('socket 故障：传输层 503/服务端闸门对真 socket 生效、账本 serverResponse 区分', async function test_socket_故障_传输层_503_服务端闸门对真_socket_生效_账本_serverResponse_区分() {
   // 输入：注入传输层 503（once）后真 socket 两次请求；再注入服务端 wait 闸门，观察早退与放行
   const out = await f_withBoard(f_boardHandler, async (port) => {
     liteHttp.t_inject({ method: 'GET', path: '/api/echo', status: 503, body: { error: '传输不可用' }, once: true });
@@ -2683,7 +2683,7 @@ test('socket 故障：传输层 503/服务端闸门对真 socket 生效、账本
 });
 
 /** 场景：socket 中断联动取消——闸门挂起期间客户端弃连，放行后不投递、账本停在 status 0。 */
-test('socket 中断：弃连联动取消投递、账本停在 status 0、服务继续可用', async () => {
+test('socket 中断：弃连联动取消投递、账本停在 status 0、服务继续可用', async function test_socket_中断_弃连联动取消投递_账本停在_status_0_服务继续可用() {
   // 输入：闸门挂起期间真 socket 客户端 50ms 后弃连，放行闸门再发起后续请求
   const out = await f_withBoard(f_boardHandler, async (port) => {
     const gate = Promise.withResolvers();
@@ -2712,7 +2712,7 @@ test('socket 中断：弃连联动取消投递、账本停在 status 0、服务�
 });
 
 /** 场景：闸门失败按管线异常收场——wait promise 拒绝时连接拆除、账本停在 status 0。 */
-test('闸门失败：wait 拒绝按请求错误收场、连接拆除、账本不回填', async () => {
+test('闸门失败：wait 拒绝按请求错误收场、连接拆除、账本不回填', async function test_闸门失败_wait_拒绝按请求错误收场_连接拆除_账本不回填() {
   // 输入：注入 wait 已拒绝的闸门后真 socket 请求
   const out = await f_withBoard(f_boardHandler, async (port) => {
     const boom = Promise.reject(new Error('闸门崩溃'));
@@ -2732,7 +2732,7 @@ test('闸门失败：wait 拒绝按请求错误收场、连接拆除、账本不
 });
 
 /** 场景：防误用守卫——lite-server mock 但 lite-http 未 mock 时 socket 前端明确报错，不外联。 */
-test('防误用守卫：lite-http 未 mock 时 socket 前端 500 明确报错、无真实外联', async () => {
+test('防误用守卫：lite-http 未 mock 时 socket 前端 500 明确报错、无真实外联', async function test_防误用守卫_lite_http_未_mock_时_socket_前端_500_明确报错_无真实外联() {
   // 输入：仅 mock lite-server 并监听（lite-http 全程未 mock），真 socket 请求
   liteServer.t_mock();
   const server = liteServer.createServer(f_boardHandler).listen(0);
@@ -2751,7 +2751,7 @@ test('防误用守卫：lite-http 未 mock 时 socket 前端 500 明确报错、
 });
 
 /** 场景：端口策略与关停——动态口/显式口绑定、unmock 真实关停拒连、未 mock 门面空态。 */
-test('端口策略与关停：动态/显式口、unmock 关停拒连、未 mock 空态', async () => {
+test('端口策略与关停：动态/显式口、unmock 关停拒连、未 mock 空态', async function test_端口策略与关停_动态_显式口_unmock_关停拒连_未_mock_空态() {
   // 输入：未 mock 时查询端口与账本
   // 预期 1：无绑定端口（null）
   assert.equal(liteServer.t_port(), null, '未 mock 时无绑定端口');
@@ -2799,7 +2799,7 @@ test('端口策略与关停：动态/显式口、unmock 关停拒连、未 mock 
 });
 
 /** 场景：URL 定向故障在内存直调和真实 socket 回灌中一致，保留 Host、方法与查询隔离。 */
-test('URL 回灌：两层故障、Host 来源、方法、查询与 once 一致', async () => {
+test('URL 回灌：两层故障、Host 来源、方法、查询与 once 一致', async function test_URL_回灌_两层故障_Host_来源_方法_查询与_once_一致() {
   await f_withBoard((req, res) => res.end('handler'), async port => {
     for (const injector of [liteHttp, liteServer]) {
       for (const client of [liteHttp, http]) {
@@ -2828,7 +2828,7 @@ test('URL 回灌：两层故障、Host 来源、方法、查询与 once 一致',
 });
 
 /** 场景：URL 定向 wait 只挂起目标请求，未命中正常响应，once 在放行前已消耗。 */
-test('URL 闸门：两层 wait 只挂目标、未命中直通、once 放行前自毁', async () => {
+test('URL 闸门：两层 wait 只挂目标、未命中直通、once 放行前自毁', async function test_URL_闸门_两层_wait_只挂目标_未命中直通_once_放行前自毁() {
   await f_withBoard((req, res) => res.end('handler'), async port => {
     for (const injector of [liteHttp, liteServer]) {
       const gate = Promise.withResolvers();
@@ -2853,7 +2853,7 @@ test('URL 闸门：两层 wait 只挂目标、未命中直通、once 放行前�
 });
 
 /** 场景：异步 handler 拒绝时回 500，同一服务后续请求仍能正常完成。 */
-test('异步 handler 失败：拒绝转为 500，后续请求仍成功', async () => {
+test('异步 handler 失败：拒绝转为 500，后续请求仍成功', async function test_异步_handler_失败_拒绝转为_500_后续请求仍成功() {
   // 输入：通过服务创建接口登记会拒绝的业务 handler，经真实 socket 请求触发
   await f_withBoard(async (req, res) => {
     if (req.url === '/reject') throw new Error('handler-rejected');

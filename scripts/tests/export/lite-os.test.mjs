@@ -5,7 +5,7 @@ import liteOs from '../../lite-os.mjs';
 import os from 'node:os';
 
 /** 场景：未 mock 时全部面原样转发真实 node:os——生产行为不变。 */
-test('默认透传：真实 homedir/tmpdir/标识面，isMocked 为假', () => {
+test('默认透传：真实 homedir/tmpdir/标识面，isMocked 为假', function test_默认透传_真实_homedir_tmpdir_标识面_isMocked_为假() {
   // 输入：未 mock 状态下逐面调用 os 接口并与 node:os 原生值对比。
   liteOs.t_unmock();
   assert.equal(liteOs.isMocked(), false, '未 mock 不应处于内存覆盖态');
@@ -19,7 +19,7 @@ test('默认透传：真实 homedir/tmpdir/标识面，isMocked 为假', () => {
 
 /** 场景：mock 后路径锚点取覆盖值、未覆盖键与本机同源；EOL 常量不受覆盖影响。 */
   // 输入：未 mock 状态下逐面调用 os 接口并与 node:os 原生值对比。
-test('内存覆盖：路径锚点取覆盖值，未覆盖键同源', () => {
+test('内存覆盖：路径锚点取覆盖值，未覆盖键同源', function test_内存覆盖_路径锚点取覆盖值_未覆盖键同源() {
   // 输入：t_mock 覆盖 homedir/tmpdir 后逐面读取，并与本机未覆盖键对比。
   liteOs.t_unmock();
   liteOs.t_mock({ homedir: '/mock/home', tmpdir: '/mock/tmp' });
@@ -36,7 +36,7 @@ test('内存覆盖：路径锚点取覆盖值，未覆盖键同源', () => {
 
   // 输入：t_mock 覆盖 homedir/tmpdir 后逐面读取，并与本机未覆盖键对比。
 /** 场景：已覆盖时再次 mock 按键合并——新键追加、旧键保留；unmock 后回到原生。 */
-test('覆盖合并：增量追加且互不覆盖，unmock 复位', () => {
+test('覆盖合并：增量追加且互不覆盖，unmock 复位', function test_覆盖合并_增量追加且互不覆盖_unmock_复位() {
   // 输入：两次增量 t_mock 合并覆盖键，随后 t_unmock 复位。
   liteOs.t_unmock();
   liteOs.t_mock({ homedir: '/mock/home' });
@@ -54,7 +54,7 @@ test('覆盖合并：增量追加且互不覆盖，unmock 复位', () => {
   // 输入：两次增量 t_mock 合并覆盖键，随后 t_unmock 复位。
 
 /** 场景：未支持的覆盖键明确报错，不静默忽略。 */
-test('覆盖校验：未知键明确报错', () => {
+test('覆盖校验：未知键明确报错', function test_覆盖校验_未知键明确报错() {
   // 输入：向 t_mock 传入未知键与非对象参数。
   liteOs.t_unmock();
   assert.throws(() => liteOs.t_mock({ userInfo: {} }), /不支持键/, '未知覆盖键应报错');
@@ -64,7 +64,7 @@ test('覆盖校验：未知键明确报错', () => {
 
 /** 场景：包自引用 specifier 与相对导入共享同一单例——业务经 litenvi-node/lite-os.mjs 导入的
  * 路径锚点与库内部相对导入必须是同一实例，否则覆盖会静默分裂（exports 变动先红）。 */
-test('包自引用 specifier 与相对导入共享同一单例', async () => {
+test('包自引用 specifier 与相对导入共享同一单例', async function test_包自引用_specifier_与相对导入共享同一单例() {
   // 输入：经 litenvi-node 包 specifier 动态导入本模块并与相对导入实例对比。
   const selfRef = await import('litenvi-node/lite-os.mjs');
   assert.equal(selfRef.default, liteOs, '同一模块经不同 specifier 应共享同一实例');

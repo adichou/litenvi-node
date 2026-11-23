@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import config from '../../../eslint.config.mjs';
 
 /** 场景：根配置启用插件、纯库入口检查和配置守护，原生权限交由规则内置。 */
-test('根配置保留纯库测试与原生对照的边界', () => {
+test('根配置保留纯库测试与原生对照的边界', function test_根配置保留纯库测试与原生对照的边界() {
   assert.ok(config.some(block => block.plugins?.atb), 'plugins.atb 应真实注册');
   const entry = config.find(block => block.rules?.['atb/no-undeclared-entry-in-test']);
   assert.equal(entry.rules['atb/no-undeclared-entry-in-test'][1].uiTest.enabled, false, '纯库应关闭 UI 入口');
