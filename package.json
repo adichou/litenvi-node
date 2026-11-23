@@ -29,7 +29,6 @@
   "devDependencies": {
     "@playwright/test": "^1.64.1",
     "atb-eslint-plugin": "file:../atb-eslint-plugin",
-    "eslint": "9.39.4",
-    "eslint-plugin-package-json": "0.91.2"
+    "eslint": "9.39.4"
   }
 }

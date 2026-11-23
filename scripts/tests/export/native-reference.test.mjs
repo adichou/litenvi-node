@@ -12,14 +12,14 @@ import { spawnSync as nativeSpawnSync, spawn as nativeSpawn } from 'node:child_p
 import nativeFs from 'node:fs'; // 原生 fs（沿用来源用例命名）
 import { readFileSync as nativeReadFileSync, writeFileSync as nativeWriteFileSync, existsSync as nativeExistsSync } from 'node:fs'; // 具名身份绑定（lite-cmd-node 来源用例的接口身份对照）
 import net from 'node:net'; // 端口探测（lite-server 来源用例的 f_freePort）
-import { t_urlInjectionRequest } from '../lite-http-helpers.mjs';
+import { i_urlInjectionRequest } from '../lite-http-helpers.mjs';
 import realFs from 'node:fs'; // 同一模块的别名：保留 lite-fs/lite-cmd-node 来源用例的既有命名
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { t_nativeReferenceEnv } from '../native-reference-env.mjs';
+import { i_nativeReferenceEnv } from '../native-reference-env.mjs';
 import liteFs from '../../lite-fs.mjs';
 import liteChildProcess from '../../lite-child_process.mjs';
 import mgr from '../../lite-cmd-mgr.mjs';
@@ -564,7 +564,7 @@ test('真实 child_process 对照：ref/unref 控制运行引用，unmock 释放
       child.on('close', () => console.log('closed'));
       ${operation}
       console.log('started');
-    `], { encoding: 'utf8', timeout: 3000, env: t_nativeReferenceEnv() });
+    `], { encoding: 'utf8', timeout: 3000, env: i_nativeReferenceEnv() });
     return { status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr, error: result.error?.code };
   };
   // 输入：默认持有引用、主动 unref、unref 后重新 ref，分别运行原生与内存驱动
@@ -745,7 +745,7 @@ test('真实 exec 对照：参数、编码、shell、输入、失败回包与 Pr
   nativeFs.mkdirSync(realRoot + '/sub'); nativeFs.writeFileSync(realRoot + '/input.txt', 'input\n');
   const scenario = async root => {
     const results = [];
-    const options = { cwd: root, env: t_nativeReferenceEnv({ EXEC_VALUE: 'value with spaces' }) };
+    const options = { cwd: root, env: i_nativeReferenceEnv({ EXEC_VALUE: 'value with spaces' }) };
     const run = (method, args, extra = {}, input) => new Promise(resolve => {
       const child = liteChildProcess[method](...args, { ...options, ...extra }, (error, stdout, stderr) => {
         results.push({ method, error: f_execErrorShape(error, root), stdout: f_normalizeExecReference(stdout, root), stderr: f_normalizeExecReference(stderr, root), pid: child.pid > 0 });
@@ -813,7 +813,7 @@ test('真实 execFile 对照：超时、取消和回调仅一次', async () => {
       let callbacks = 0, closed;
       const promise = new Promise(resolve => {
         const child = liteChildProcess.execFile(memory ? 'node' : process.execPath, ['-e', 'setInterval(() => {}, 1000)'],
-          { env: t_nativeReferenceEnv(), ...(abort ? { signal: controller.signal } : { timeout: 20 }) }, (error, stdout, stderr) => {
+          { env: i_nativeReferenceEnv(), ...(abort ? { signal: controller.signal } : { timeout: 20 }) }, (error, stdout, stderr) => {
             callbacks++;
             results.push({ code: error.code, name: error.name, killed: error.killed, signal: error.signal, stdout, stderr });
             resolve(child);
@@ -840,7 +840,7 @@ test('真实 exec 对照：可选参数重载与非法参数', async () => {
   // 输入：exec 各参数重载与非法参数经 lite 门面与原生对照执行。
   const scenario = async () => {
     const output = [];
-    const options = { env: t_nativeReferenceEnv() };
+    const options = { env: i_nativeReferenceEnv() };
     for (const [name, args] of [['execFile', ['echo']], ['execFile', ['echo', options]],
       ['execFile', ['echo', ['args']]], ['exec', ['echo overload', options]]]) {
       await new Promise(resolve => liteChildProcess[name](...args, (error, stdout, stderr) => { output.push({ error: error?.code, stdout, stderr }); resolve(); }));
@@ -872,7 +872,7 @@ test('真实 Node 对照：spawn 超时 killSignal 终止与 stdio ignore', asyn
     const events = [];
     // 输入：常驻子进程 + 20ms 超时 + SIGKILL，观察事件序与 killed 标记
     const timed = backend.spawn('node', ['-e', 'setInterval(() => {}, 1000)'],
-      { timeout: 20, killSignal: 'SIGKILL', env: t_nativeReferenceEnv() });
+      { timeout: 20, killSignal: 'SIGKILL', env: i_nativeReferenceEnv() });
     timed.on('spawn', () => events.push('spawn'));
     timed.on('error', () => events.push('error'));
     const timedClose = new Promise(resolve => timed.once('close', (code, signal) => { events.push(['close', code, signal]); resolve(); }));
@@ -880,7 +880,7 @@ test('真实 Node 对照：spawn 超时 killSignal 终止与 stdio ignore', asyn
     await timedClose;
     events.push({ killed: timed.killed });
     // 输入：stdio 'ignore' 的快速命令——公开流为 null，正常退出
-    const ignored = backend.spawn('echo', ['done'], { stdio: 'ignore', env: t_nativeReferenceEnv() });
+    const ignored = backend.spawn('echo', ['done'], { stdio: 'ignore', env: i_nativeReferenceEnv() });
     const ignoredClose = new Promise(resolve => ignored.once('close', (code, signal) => resolve({ code, signal })));
     const ignoredShape = { stdin: ignored.stdin, stdout: ignored.stdout, stderr: ignored.stderr };
     const ignoredExit = await ignoredClose;
@@ -912,7 +912,7 @@ test('原生对照环境：调试器与颜色设置不污染输出，业务 stde
   delete inherited.NODE_DISABLE_COLORS;
   try {
     const response = liteChildProcess.spawnSync(process.execPath, ['-e', `console.log(42, process.env.LITE_REFERENCE_PROBE); console.error('Debugger attached.');`],
-      { env: t_nativeReferenceEnv({}, inherited), encoding: 'utf8', timeout: 3000 });
+      { env: i_nativeReferenceEnv({}, inherited), encoding: 'utf8', timeout: 3000 });
     // 预期 1：子进程正常结束，保留业务环境变量，数字输出不带 ANSI 色码
     assert.equal(response.error, undefined, '原生对照子进程应能启动');
     assert.equal(response.status, 0, '原生对照子进程应正常退出');
@@ -921,7 +921,7 @@ test('原生对照环境：调试器与颜色设置不污染输出，业务 stde
     assert.equal(realFs.existsSync(marker), false, '对照子进程不应加载 IDE 的调试预载模块');
     assert.equal(response.stderr, 'Debugger attached.\n', '不得通过过滤 stderr 文本掩盖业务输出');
     // 预期 3：同样的固定环境也适用于系统 ls，目录项不受 macOS 强制着色变量影响
-    const listing = liteChildProcess.spawnSync('ls', ['-a', temporary], { env: t_nativeReferenceEnv({}, inherited), encoding: 'utf8' });
+    const listing = liteChildProcess.spawnSync('ls', ['-a', temporary], { env: i_nativeReferenceEnv({}, inherited), encoding: 'utf8' });
     assert.equal(listing.status, 0, '系统 ls 对照应正常执行');
     assert.equal(listing.stderr, '', '系统 ls 对照不应额外输出诊断');
     assert.equal(listing.stdout, '.\n..\ndebug-preload.cjs\n', '目录项不应包含强制颜色的 ANSI 色码');
@@ -949,7 +949,7 @@ test('真实 Node 对照：版本、脚本输出、argv/env、模块加载与退
   realFs.writeFileSync(path.join(root, 'failure.mjs'), `throw new Error('node-reference-failure');`);
   const scenario = async memory => {
     const responses = [];
-    const options = { cwd: root, env: t_nativeReferenceEnv({ LITE_NODE_REFERENCE: 'child-value' }), encoding: 'utf8' };
+    const options = { cwd: root, env: i_nativeReferenceEnv({ LITE_NODE_REFERENCE: 'child-value' }), encoding: 'utf8' };
     const normalize = text => String(text).replaceAll(root, '<root>').replaceAll(process.execPath, '<node>');
     const run = async (command, args, errorOnly = false) => {
       const child = liteChildProcess.spawn(command, args, options);
@@ -1027,7 +1027,7 @@ test('真实 Node 对照：版本、脚本输出、argv/env、模块加载与退
 test('真实 Node 对照：stdin 脚本执行与 -p 求值打印', async () => {
   const scenario = async memory => {
     const responses = [];
-    const options = { env: t_nativeReferenceEnv(), encoding: 'utf8' };
+    const options = { env: i_nativeReferenceEnv(), encoding: 'utf8' };
     const run = async (args, input) => {
       const child = liteChildProcess.spawn(memory ? 'node' : process.execPath, args, options);
       let stdout = '', stderr = '';
@@ -1269,7 +1269,7 @@ test('真实 OS 对照：文件命令、相对路径、错误输出与同步/异
   // 输入：隔离真实临时目录，固定 C 语言环境与非终端输出；每轮使用全新工作目录
   const temporary = nativeFs.mkdtempSync(path.join(os.tmpdir(), 'litenvi-os-reference-'));
   const realRoot = nativeFs.realpathSync(temporary);
-  const env = t_nativeReferenceEnv();
+  const env = i_nativeReferenceEnv();
   const scenario = async (root, fileSystem, asynchronous) => {
     fileSystem.mkdirSync(root, { recursive: true });
     fileSystem.writeFileSync(path.join(root, 'source.txt'), 'alpha\n');
@@ -1368,7 +1368,7 @@ test('真实 OS 对照：文件命令、相对路径、错误输出与同步/异
 
 /** 场景：只向本用例启动的进程发信号，退出码借原生 shell 内建 exit 作对照。 */
 test('真实 OS 对照：kill 探测、信号终止、失效 PID 与 exit 退出码', async () => {
-  const env = t_nativeReferenceEnv();
+  const env = i_nativeReferenceEnv();
   const scenario = async (memory, asynchronous) => {
     const responses = [];
     const target = liteChildProcess.spawn(memory ? 'node' : process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { env });
@@ -2556,7 +2556,7 @@ test('多个服务按域名和端口独立路由，关闭互不影响', async ()
   try {
     assert.deepEqual(apple.address(), { address: 'api.example.test', family: 'virtual', port: 80 }, '虚拟服务应公开监听地址');
     assert.equal((await f_realGet(board.port, '/')).body, 'board', '真实回环请求应抵达看板');
-    assert.equal((await t_urlInjectionRequest(liteHttp, { hostname: 'api.example.test', path: '/builds?x=1' })).body, 'apple:/builds?x=1', '指定域名应抵达模拟服务');
+    assert.equal((await i_urlInjectionRequest(liteHttp, { hostname: 'api.example.test', path: '/builds?x=1' })).body, 'apple:/builds?x=1', '指定域名应抵达模拟服务');
     const wrong = await new Promise(resolve => liteHttp.request({ hostname: 'other.example.test', port: 80, path: '/' }).on('error', error => resolve(error.code)).end());
     assert.equal(wrong, 'ECONNREFUSED', '其他域名不能误路由');
     await new Promise(resolve => apple.close(resolve));
@@ -2578,8 +2578,8 @@ test('两个回环服务及同端口不同域名的虚拟服务彼此隔离', as
   try {
     assert.equal((await f_realGet(first.port, '/')).body, 'first', '第一个回环服务应保持可达');
     assert.equal((await f_realGet(second.port, '/')).body, 'second', '第二个回环服务应保持可达');
-    assert.equal((await t_urlInjectionRequest(liteHttp, { hostname: 'a.test', port: 443, path: '/' })).body, 'a', '域名 a 应路由到 a 服务');
-    assert.equal((await t_urlInjectionRequest(liteHttp, { hostname: 'b.test', port: 443, path: '/' })).body, 'b', '相同端口的域名 b 应路由到 b 服务');
+    assert.equal((await i_urlInjectionRequest(liteHttp, { hostname: 'a.test', port: 443, path: '/' })).body, 'a', '域名 a 应路由到 a 服务');
+    assert.equal((await i_urlInjectionRequest(liteHttp, { hostname: 'b.test', port: 443, path: '/' })).body, 'b', '相同端口的域名 b 应路由到 b 服务');
     const duplicate = liteServer.createServer((_req, res) => res.end());
     const error = new Promise(resolve => duplicate.once('error', resolve));
     duplicate.listen({ virtual: true, host: 'A.TEST', port: 443 });
@@ -2803,7 +2803,7 @@ test('URL 回灌：两层故障、Host 来源、方法、查询与 once 一致',
   await f_withBoard((req, res) => res.end('handler'), async port => {
     for (const injector of [liteHttp, liteServer]) {
       for (const client of [liteHttp, http]) {
-        const send = (path, extra = {}) => t_urlInjectionRequest(client, { hostname: '127.0.0.1', port, path, headers: { Host: `public.test:${port}` }, ...extra });
+        const send = (path, extra = {}) => i_urlInjectionRequest(client, { hostname: '127.0.0.1', port, path, headers: { Host: `public.test:${port}` }, ...extra });
         // 输入：socket 连接仍指向回环地址，注入 URL 使用原始 Host，并同时限定 POST 和查询串
         injector.t_inject({ url: `http://public.test:${port}/same?a=1`, method: 'POST', status: 503, once: true });
         const misses = [await send('/same?a=2', { method: 'POST' }), await send('/same?a=1'),
@@ -2832,7 +2832,7 @@ test('URL 闸门：两层 wait 只挂目标、未命中直通、once 放行前�
   await f_withBoard((req, res) => res.end('handler'), async port => {
     for (const injector of [liteHttp, liteServer]) {
       const gate = Promise.withResolvers();
-      const send = path => t_urlInjectionRequest(http, { hostname: '127.0.0.1', port, path });
+      const send = path => i_urlInjectionRequest(http, { hostname: '127.0.0.1', port, path });
       injector.t_inject({ url: '/same?held=1', wait: gate.promise, once: true });
       let settled = false;
       // 输入：真实 socket 请求命中路径 URL 闸门，另一个查询 URL 不命中

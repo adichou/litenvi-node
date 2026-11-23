@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import liteHttp from '../../lite-http.mjs';
 import liteServer from '../../lite-server.mjs';
-import { t_urlInjectionRequest } from '../lite-http-helpers.mjs';
+import { i_urlInjectionRequest } from '../lite-http-helpers.mjs';
 
 
 
@@ -272,7 +272,7 @@ test('包自引用 specifier 与相对导入共享同一单例', async () => {
 /** 场景：服务端复位撤销旧路由且不清客户端故障，重建后只执行新 handler。 */
 test('服务端复位撤销旧路由并保留客户端故障', async () => {
   // 输入：保留客户端配置，卸载服务端后在相同地址登记新服务。
-  const f_send = (path = '/') => t_urlInjectionRequest(liteHttp, { hostname: 'transport.test', port: 443, path });
+  const f_send = (path = '/') => i_urlInjectionRequest(liteHttp, { hostname: 'transport.test', port: 443, path });
   liteHttp.t_unmock(); liteServer.t_unmock();
   liteHttp.t_mock(); liteServer.t_mock();
   let oldHandled = 0;

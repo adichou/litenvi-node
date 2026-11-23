@@ -19,7 +19,7 @@ import { t_install } from '../../lite-cmd-git.mjs';
 import { t_install as t_installOsCommands } from '../../lite-cmd-os.mjs';
 import mgr from '../../lite-cmd-mgr.mjs';
 import liteFs from '../../lite-fs.mjs';
-import os from 'node:os';
+import os from 'litenvi-node/lite-os.mjs';
 
 // 逐用例装配：mock 内存卷 + spawn 边界（git 执行唯一入口——新架构执行寻址须卷内 /mock-cmd
 // 系统卷）；收尾卸载子进程运行态并摘除钩子。卷排除本仓库根（真实文件不落卷）
